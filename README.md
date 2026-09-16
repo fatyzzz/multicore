@@ -96,7 +96,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\smoke-test-one-c
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\build-windows-installer.ps1 `
   -PackagePath dist\multicore-windows-x64 `
   -OutputDirectory dist\release `
-  -AppVersion 0.1.1
+  -AppVersion 0.1.2
 ```
 
 Установщик кладёт клиент в `%LOCALAPPDATA%\Programs\MultiCore`, добавляет ярлык,

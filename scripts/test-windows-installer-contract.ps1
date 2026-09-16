@@ -37,6 +37,8 @@ foreach ($token in @(
     '""{app}\current\MultiCore.exe"" ""%1""',
     'Filename: "{app}\current\MultiCore.exe"',
     'WorkingDir: "{app}\current"',
+    'Verb: "runas"',
+    'Flags: postinstall shellexec skipifsilent',
     'Type: filesandordirs; Name: "{app}\.multicore-previous-*"',
     'Type: filesandordirs; Name: "{app}\.multicore-failed-*"',
     'Type: filesandordirs; Name: "{app}\.multicore-stage-*"',
@@ -54,7 +56,8 @@ foreach ($forbiddenToken in @(
     'ValueData: "{app}\MultiCore.exe,0"',
     '""{app}\MultiCore.exe"" --background',
     '""{app}\MultiCore.exe"" ""%1""',
-    'uninsdeletevalue'
+    'uninsdeletevalue',
+    'Flags: nowait postinstall skipifsilent'
 )) {
     Assert-True (-not $definition.Contains($forbiddenToken)) "installer definition still uses the root payload path: $forbiddenToken"
 }

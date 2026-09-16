@@ -37,6 +37,7 @@ crates/multicore-core/src/network.rs — native Windows default-route/interface 
 - Production `MultiCore.exe` must embed manifest ID 1 with numeric PE resource type 24 and `requireAdministrator`; the literal token `RT_MANIFEST` becomes an inert string resource under the current resource toolchain.
 - Debug/test desktop builds intentionally embed `asInvoker`; otherwise Windows returns error 740 when Cargo launches the test harness.
 - Private GitHub repositories also make release assets private; the client updater cannot read them anonymously and must not embed a repository access token.
+- Inno Setup must launch the elevated desktop from `[Run]` with `shellexec` and verb `runas`; direct `CreateProcess` fails with Windows error 740.
 - The smoke test must enumerate the visible `MultiCore` window by exact PID/title; `Process.MainWindowHandle` selects Winit's service window on this host and does not test a real user close.
 - Production packaging builds in a fresh private target directory with Cargo/rustc 1.98.1 and rejects binaries containing the builder's private absolute paths.
 - Core archives are pinned to exact official release URLs and archive/executable SHA-256 values; runtime never downloads cores.
