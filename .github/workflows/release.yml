@@ -64,6 +64,8 @@ jobs:
             -DestinationPath dist/release/multicore-windows-x64 `
             -UpdateRepository fatyzzz/multicore `
             -ReleaseAssetPath dist/release/multicore-windows-x64.zip
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-windows-elevation-manifest.ps1 `
+            -ExecutablePath dist/release/multicore-windows-x64/MultiCore.exe
 
       - name: Install pinned Inno Setup
         shell: pwsh
@@ -134,6 +136,7 @@ jobs:
 
           - `MultiCore-Setup-x64.exe` — per-user installer.
           - `multicore-windows-x64.zip` — verified portable bundle and updater asset.
+          - Normal launch triggers the standard Windows UAC prompt required by Mihomo TUN; manual "Run as administrator" is not needed.
           - Upstream source archives are attached for the exact bundled Xray-core and Mihomo commits.
 
           The binaries are not Authenticode-signed yet, so Windows SmartScreen may show a warning.

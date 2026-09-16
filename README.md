@@ -17,7 +17,7 @@ dist\multicore-windows-x64\MultiCore.exe
 
 Это единственный пользовательский `.exe`. Он сам:
 
-1. проверяет комплектность `runtime\multicore-daemon.exe` и обоих ядер;
+1. запрашивает стандартное подтверждение Windows UAC, затем проверяет комплектность `runtime\multicore-daemon.exe` и обоих ядер;
 2. создаёт случайный локальный токен;
 3. без консоли запускает daemon на свободном loopback-порту;
 4. проверяет авторизованный `/v1/status`;
@@ -96,7 +96,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\smoke-test-one-c
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\build-windows-installer.ps1 `
   -PackagePath dist\multicore-windows-x64 `
   -OutputDirectory dist\release `
-  -AppVersion 0.1.0
+  -AppVersion 0.1.1
 ```
 
 Установщик кладёт клиент в `%LOCALAPPDATA%\Programs\MultiCore`, добавляет ярлык,

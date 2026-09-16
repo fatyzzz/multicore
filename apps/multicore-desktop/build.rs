@@ -47,6 +47,7 @@ export component ComponentCheck inherits Window {{
     println!("cargo:rerun-if-changed=assets/app-icon.svg");
     println!("cargo:rerun-if-changed=assets/close.svg");
     println!("cargo:rerun-if-changed=app.manifest");
+    println!("cargo:rerun-if-changed=app-debug.manifest");
 
     if std::env::var_os("CARGO_CFG_WINDOWS").is_some() {
         compile_windows_resources(&manifest_dir, &output_dir);
@@ -72,9 +73,13 @@ fn compile_windows_resources(manifest_dir: &std::path::Path, output_dir: &std::p
         .expect("failed to write MultiCore icon");
 
     let resource_path = output_dir.join("multicore-desktop.rc");
-    let manifest_path = manifest_dir.join("app.manifest");
+    let manifest_name = match std::env::var("PROFILE").as_deref() {
+        Ok("release") => "app.manifest",
+        _ => "app-debug.manifest",
+    };
+    let manifest_path = manifest_dir.join(manifest_name);
     let resource_source = format!(
-        "1 RT_MANIFEST \"{}\"\n1 ICON \"{}\"\n",
+        "1 24 \"{}\"\n1 ICON \"{}\"\n",
         manifest_path.display().to_string().replace('\\', "/"),
         icon_path.display().to_string().replace('\\', "/"),
     );

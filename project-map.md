@@ -1,5 +1,5 @@
 # Project Map
-_Updated: 2026-09-16 | Git: unborn branch_
+_Updated: 2026-09-17 | Git: 4753ab1_
 
 ## Directory Structure
 packaging/windows-x64/ — pinned upstream-core manifest, license texts, notices, and portable-package README.
@@ -13,6 +13,9 @@ scripts/ — packaging, one-click smoke verification, secret-free visual fixture
 docs/specs/2026-09-15-one-click-bootstrap-design.md — approved portable package, daemon bootstrap, Job Object, and failure contract.
 docs/plans/2026-09-15-one-click-bootstrap.md — TDD plan for one-click startup and bundled pinned cores.
 apps/multicore-desktop/src/bootstrap.rs — package validation, random local token, at-creation Job Object launch, readiness/status wait, and cleanup.
+apps/multicore-desktop/app.manifest — release-only Windows UAC contract; requests administrator so Mihomo TUN inherits an elevated token.
+apps/multicore-desktop/app-debug.manifest — non-elevated debug/test contract so local tests and CI never require UAC.
+scripts/test-windows-elevation-manifest.ps1 — reads numeric PE resource type 24 and rejects release binaries without the real elevation manifest.
 scripts/package-windows-release.ps1 — pinned Rust build, private-path remapping, exact-pin download, safe ZIP extraction, PE validation, and fail-closed publication.
 scripts/smoke-test-one-click.ps1 — exact-window normal-close and forced-crash GUI/bootstrap/authentication/process-cleanup smoke tests.
 README.md — build/run guide and current v1 boundaries.
@@ -31,6 +34,9 @@ crates/multicore-core/src/network.rs — native Windows default-route/interface 
 ## Critical Constraints
 - Normal Windows startup requires only `MultiCore.exe`; it owns a hidden packaged daemon and descendants through a kill-on-close Job Object.
 - WinAPI process-attribute values must outlive `CreateProcessW`; the Job-list handle array is intentionally stored through the call because a temporary slice produced release-only `ERROR_INVALID_HANDLE`.
+- Production `MultiCore.exe` must embed manifest ID 1 with numeric PE resource type 24 and `requireAdministrator`; the literal token `RT_MANIFEST` becomes an inert string resource under the current resource toolchain.
+- Debug/test desktop builds intentionally embed `asInvoker`; otherwise Windows returns error 740 when Cargo launches the test harness.
+- Private GitHub repositories also make release assets private; the client updater cannot read them anonymously and must not embed a repository access token.
 - The smoke test must enumerate the visible `MultiCore` window by exact PID/title; `Process.MainWindowHandle` selects Winit's service window on this host and does not test a real user close.
 - Production packaging builds in a fresh private target directory with Cargo/rustc 1.98.1 and rejects binaries containing the builder's private absolute paths.
 - Core archives are pinned to exact official release URLs and archive/executable SHA-256 values; runtime never downloads cores.
