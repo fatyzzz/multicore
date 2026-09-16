@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - 'feature/**'
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+      RUSTUP_TOOLCHAIN: 1.98.1-x86_64-pc-windows-msvc
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.98.1-x86_64-pc-windows-msvc --profile minimal --component rustfmt,clippy
+          rustup default 1.98.1-x86_64-pc-windows-msvc
+      - name: Verify
+        shell: pwsh
+        run: |
+          cargo fmt --all -- --check
+          cargo test --workspace --all-targets --locked
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-package-windows-release.ps1
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-windows-installer-contract.ps1
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-release-workflow-contract.ps1

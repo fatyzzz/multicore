@@ -1,0 +1,157 @@
+name: Windows release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: always
+      RUSTUP_TOOLCHAIN: 1.98.1-x86_64-pc-windows-msvc
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust toolchain
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.98.1-x86_64-pc-windows-msvc --profile minimal --component rustfmt,clippy
+          rustup default 1.98.1-x86_64-pc-windows-msvc
+          rustc -Vv
+          cargo -V
+
+      - name: Verify tag and package version
+        shell: pwsh
+        run: |
+          $manifest = Get-Content -Raw apps/multicore-desktop/Cargo.toml
+          $match = [regex]::Match($manifest, '(?m)^version\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"\s*$')
+          if (-not $match.Success) { throw 'Desktop package version was not found' }
+          $expectedTag = "v$($match.Groups[1].Value)"
+          if ($env:GITHUB_REF_NAME -cne $expectedTag) {
+            throw "Release tag $env:GITHUB_REF_NAME does not match $expectedTag"
+          }
+          "APP_VERSION=$($match.Groups[1].Value)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Verify source
+        shell: pwsh
+        run: |
+          cargo fmt --all -- --check
+          cargo test --workspace --all-targets --locked
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-package-windows-release.ps1
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-windows-installer-contract.ps1
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-release-workflow-contract.ps1
+
+      - name: Build verified portable bundle
+        shell: pwsh
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/package-windows-release.ps1 `
+            -DestinationPath dist/release/multicore-windows-x64 `
+            -UpdateRepository fatyzzz/multicore `
+            -ReleaseAssetPath dist/release/multicore-windows-x64.zip
+
+      - name: Install pinned Inno Setup
+        shell: pwsh
+        run: |
+          $url = 'https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe'
+          $installer = Join-Path $env:RUNNER_TEMP 'innosetup-6.7.3.exe'
+          Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $installer
+          $actual = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          $expected = '9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732'
+          if ($actual -cne $expected) { throw 'Inno Setup installer checksum mismatch' }
+          $process = Start-Process -FilePath $installer `
+            -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER') `
+            -Wait -PassThru -WindowStyle Hidden
+          if ($process.ExitCode -ne 0) { throw "Inno Setup install failed: $($process.ExitCode)" }
+
+      - name: Build Windows installer
+        shell: pwsh
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows-installer.ps1 `
+            -PackagePath dist/release/multicore-windows-x64 `
+            -OutputDirectory dist/release `
+            -AppVersion $env:APP_VERSION
+
+      - name: Smoke-test installed update boundary
+        shell: pwsh
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-test-windows-installed-update.ps1 `
+            -InstallerPath dist/release/MultiCore-Setup-x64.exe `
+            -PackagePath dist/release/multicore-windows-x64
+
+      - name: Preserve pinned upstream source
+        shell: pwsh
+        run: |
+          $manifest = Get-Content -Raw packaging/windows-x64/versions.json | ConvertFrom-Json
+          $sources = @(
+            @{ Component = $manifest.components.xray; Name = 'Xray-core-source.zip' },
+            @{ Component = $manifest.components.mihomo; Name = 'mihomo-source.zip' }
+          )
+          foreach ($source in $sources) {
+            $destination = Join-Path 'dist/release' $source.Name
+            Invoke-WebRequest -UseBasicParsing -Uri $source.Component.source.url -OutFile $destination
+            $actual = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -cne [string]$source.Component.source.sha256) {
+              throw "Pinned source checksum mismatch for $($source.Name)"
+            }
+          }
+
+      - name: Create release checksums and notes
+        shell: pwsh
+        run: |
+          $assets = @(
+            'dist/release/multicore-windows-x64.zip',
+            'dist/release/MultiCore-Setup-x64.exe',
+            'dist/release/Xray-core-source.zip',
+            'dist/release/mihomo-source.zip'
+          )
+          $lines = foreach ($asset in $assets) {
+            $hash = (Get-FileHash -LiteralPath $asset -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $([IO.Path]::GetFileName($asset))"
+          }
+          [IO.File]::WriteAllLines(
+            (Join-Path $PWD 'dist/release/RELEASE-SHA256SUMS.txt'),
+            $lines,
+            [Text.UTF8Encoding]::new($false)
+          )
+          @"
+          MultiCore $env:APP_VERSION for Windows x64.
+
+          - `MultiCore-Setup-x64.exe` — per-user installer.
+          - `multicore-windows-x64.zip` — verified portable bundle and updater asset.
+          - Upstream source archives are attached for the exact bundled Xray-core and Mihomo commits.
+
+          The binaries are not Authenticode-signed yet, so Windows SmartScreen may show a warning.
+          "@ | Set-Content -LiteralPath dist/release/RELEASE_NOTES.md -Encoding utf8
+
+      - name: Publish draft release atomically
+        shell: pwsh
+        run: |
+          $assets = @(
+            'dist/release/multicore-windows-x64.zip',
+            'dist/release/MultiCore-Setup-x64.exe',
+            'dist/release/Xray-core-source.zip',
+            'dist/release/mihomo-source.zip',
+            'dist/release/RELEASE-SHA256SUMS.txt'
+          )
+          gh release create $env:GITHUB_REF_NAME @assets `
+            --verify-tag `
+            --draft `
+            --title "MultiCore $env:APP_VERSION" `
+            --notes-file dist/release/RELEASE_NOTES.md
+          gh release edit $env:GITHUB_REF_NAME --draft=false

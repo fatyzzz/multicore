@@ -1,0 +1,436 @@
+import { Theme } from "theme.slint";
+import "../assets/fonts/Twemoji.Mozilla.ttf";
+
+export component IconAction inherits FocusScope {
+    in property <image> icon-source;
+    in property <string> state-label;
+    callback activated();
+
+    min-width: Theme.interactive-min;
+    preferred-width: Theme.interactive-min;
+    max-width: Theme.interactive-min;
+    min-height: Theme.interactive-min;
+    preferred-height: Theme.interactive-min;
+    max-height: Theme.interactive-min;
+    focus-on-click: true;
+    focus-on-tab-navigation: true;
+    accessible-role: button;
+    accessible-label: root.state-label;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        if (root.enabled) {
+            root.activated();
+        }
+    }
+    key-pressed(event) => {
+        if ((event.text == " " || event.text == "\n") && root.enabled) {
+            root.activated();
+            return accept;
+        }
+        return reject;
+    }
+
+    Rectangle {
+        background: action-touch.pressed
+            ? #ffffff10
+            : action-touch.has-hover ? Theme.elevated : transparent;
+        border-color: root.has-focus ? Theme.focus : transparent;
+        border-width: root.has-focus ? Theme.focus-width : 0px;
+        border-radius: Theme.radius-small;
+        opacity: root.enabled ? 1 : 0.45;
+
+        Image {
+            x: (parent.width - 18px) / 2;
+            y: (parent.height - 18px) / 2;
+            width: 18px;
+            height: 18px;
+            source: root.icon-source;
+            image-fit: contain;
+            accessible-role: none;
+        }
+
+        action-touch := TouchArea {
+            enabled: root.enabled;
+            clicked => { root.activated(); }
+        }
+    }
+}
+
+export component PrimaryAction inherits Rectangle {
+    in property <string> label;
+    in property <string> state-label: label;
+    in property <bool> enabled: true;
+    in property <int> focus-epoch: 0;
+    callback activated();
+
+    changed focus-epoch => {
+        if (root.focus-epoch > 0) {
+            action-focus.focus();
+        }
+    }
+
+    min-width: Theme.interactive-min;
+    horizontal-stretch: 0;
+    max-width: 184px;
+    min-height: Theme.interactive-min;
+    preferred-height: Theme.interactive-min;
+    max-height: Theme.interactive-min;
+    background: root.enabled
+        ? action-touch.pressed
+            ? Theme.accent-blue-pressed
+            : action-touch.has-hover ? Theme.accent-blue-hover : Theme.accent-blue
+        : Theme.elevated;
+    border-color: action-focus.has-focus ? Theme.focus : root.enabled ? root.background : Theme.line;
+    border-width: action-focus.has-focus ? Theme.focus-width : 1px;
+    border-radius: 14px;
+    opacity: root.enabled ? 1 : 0.55;
+    accessible-role: button;
+    accessible-label: root.state-label;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        if (root.enabled) {
+            root.activated();
+        }
+    }
+
+    Text {
+        x: Theme.space-4;
+        y: -1px;
+        width: parent.width - Theme.space-4 * 2;
+        height: parent.height;
+        text: root.label;
+        color: root.enabled ? Theme.text-primary : Theme.text-muted;
+        font-family: Theme.font-family;
+        font-size: Theme.type-value-size;
+        font-weight: Theme.weight-semibold;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        overflow: elide;
+        accessible-role: none;
+    }
+
+    action-focus := FocusScope {
+        enabled: root.enabled;
+        focus-on-click: true;
+        focus-on-tab-navigation: true;
+        key-pressed(event) => {
+            if (event.text == " " || event.text == "\n") {
+                root.activated();
+                return accept;
+            }
+            return reject;
+        }
+
+        action-touch := TouchArea {
+            enabled: root.enabled;
+            clicked => { root.activated(); }
+        }
+    }
+}
+
+export component QuietChip inherits Rectangle {
+    in property <string> icon;
+    in property <string> label;
+    in property <string> selected-state-label: "выбрано";
+    in property <string> state-label:
+        root.label + (root.selected ? ", " + root.selected-state-label : "");
+    in property <bool> enabled: true;
+    in property <bool> selected: false;
+    in property <bool> focus-on-init: false;
+    in property <int> focus-epoch: 0;
+    callback activated();
+
+    init => {
+        if (root.focus-on-init) {
+            chip-focus.focus();
+        }
+    }
+    changed focus-epoch => {
+        if (root.focus-epoch > 0) {
+            chip-focus.focus();
+        }
+    }
+
+    min-width: Theme.interactive-min;
+    horizontal-stretch: 0;
+    max-width: 184px;
+    min-height: Theme.interactive-min;
+    preferred-width: chip-label.preferred-width + Theme.space-4 * 2 + (root.icon == "" ? 0px : 24px);
+    preferred-height: Theme.interactive-min;
+    background: root.selected ? #0091ff1f : #ffffff08;
+    border-color: chip-focus.has-focus ? Theme.focus : root.selected ? #0091ff66 : #ffffff12;
+    border-width: chip-focus.has-focus ? Theme.focus-width : 1px;
+    border-radius: 14px;
+    opacity: root.enabled ? 1 : 0.5;
+    accessible-role: button;
+    accessible-label: root.state-label;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        if (root.enabled) {
+            root.activated();
+        }
+    }
+
+    if root.icon != "": Text {
+        x: Theme.space-3;
+        width: 20px;
+        height: parent.height;
+        text: root.icon;
+        color: root.selected ? Theme.accent-blue-hover : Theme.text-secondary;
+        font-family: Theme.emoji-font-family;
+        font-size: Theme.type-label-size;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+
+    chip-label := Text {
+        x: root.icon == "" ? Theme.space-4 : 36px;
+        width: parent.width - self.x - Theme.space-4;
+        height: parent.height;
+        text: root.label;
+        color: root.selected ? Theme.text-primary : Theme.text-secondary;
+        font-family: Theme.font-family;
+        font-size: Theme.type-metadata-size;
+        font-weight: root.selected ? Theme.weight-semibold : Theme.weight-regular;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        overflow: elide;
+        accessible-role: none;
+    }
+
+    chip-focus := FocusScope {
+        enabled: root.enabled;
+        focus-on-click: true;
+        focus-on-tab-navigation: true;
+        key-pressed(event) => {
+            if (event.text == " " || event.text == "\n") {
+                root.activated();
+                return accept;
+            }
+            return reject;
+        }
+
+        TouchArea {
+            enabled: root.enabled;
+            clicked => { root.activated(); }
+        }
+    }
+}
+
+export component RouteNodeRow inherits Rectangle {
+    in property <string> icon;
+    in property <string> label;
+    in property <string> supporting-text;
+    in property <string> trailing-text;
+    in property <string> selected-state-label: "выбрано";
+    in property <string> pending-state-label: "выбор применяется";
+    in property <string> state-label:
+        root.label
+        + (root.supporting-text == "" ? "" : ", " + root.supporting-text)
+        + (root.trailing-text == "" ? "" : ", " + root.trailing-text)
+        + (root.pending
+            ? ", " + root.pending-state-label
+            : root.selected ? ", " + root.selected-state-label : "");
+    in property <bool> enabled: true;
+    in property <bool> selected: false;
+    in property <bool> pending: false;
+    callback activated();
+
+    min-width: Theme.interactive-min;
+    min-height: Theme.interactive-min;
+    preferred-height: 46px;
+    max-height: 46px;
+    background: root.selected ? #0091ff17 : #ffffff06;
+    border-color: row-focus.has-focus ? Theme.focus : root.selected ? #0091ff59 : #ffffff12;
+    border-width: row-focus.has-focus ? Theme.focus-width : 1px;
+    border-radius: 14px;
+    accessible-role: button;
+    accessible-label: root.state-label;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        if (root.enabled) {
+            root.activated();
+        }
+    }
+
+    Rectangle {
+        x: 8px;
+        y: 7px;
+        width: 32px;
+        height: 32px;
+        border-radius: 6px;
+        background: root.selected ? #0091ff1f : #ffffff0a;
+        border-color: root.selected ? #0091ff42 : #ffffff0f;
+        border-width: 1px;
+
+        Text {
+            text: root.icon;
+            color: root.selected ? Theme.accent-blue-hover : Theme.text-secondary;
+            font-family: Theme.emoji-font-family;
+            font-size: Theme.type-value-size;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+    }
+
+    Text {
+        x: 52px;
+        y: root.supporting-text == "" ? 0 : 2px;
+        width: parent.width - self.x - trailing-label.preferred-width - (root.selected ? 40px : Theme.space-6);
+        height: root.supporting-text == "" ? parent.height : 24px;
+        text: root.label;
+        color: Theme.text-primary;
+        font-family: Theme.font-family;
+        font-size: Theme.type-label-size;
+        font-weight: Theme.weight-semibold;
+        vertical-alignment: center;
+        overflow: elide;
+        accessible-role: none;
+    }
+
+    if root.supporting-text != "": Text {
+        x: 52px;
+        y: 23px;
+        width: parent.width - self.x - trailing-label.preferred-width - (root.selected ? 40px : Theme.space-6);
+        text: root.supporting-text;
+        color: Theme.text-muted;
+        font-family: Theme.font-family;
+        font-size: Theme.type-metadata-size;
+        font-weight: Theme.weight-regular;
+        overflow: elide;
+        accessible-role: none;
+    }
+
+    trailing-label := Text {
+        x: parent.width - self.width - (root.selected ? 40px : Theme.space-4);
+        height: parent.height;
+        text: root.trailing-text;
+        color: root.selected ? Theme.accent-blue-hover : Theme.text-secondary;
+        font-family: Theme.font-family;
+        font-size: Theme.type-metadata-size;
+        font-weight: Theme.weight-regular;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+
+    if root.selected || root.pending: Text {
+        x: parent.width - 34px;
+        width: 20px;
+        height: parent.height;
+        text: root.selected ? "✓" : "…";
+        color: root.pending ? Theme.warning : Theme.accent-blue-hover;
+        font-family: Theme.font-family;
+        font-size: Theme.type-label-size;
+        font-weight: Theme.weight-bold;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+
+    row-focus := FocusScope {
+        enabled: root.enabled;
+        focus-on-click: true;
+        focus-on-tab-navigation: true;
+        key-pressed(event) => {
+            if (event.text == " " || event.text == "\n") {
+                root.activated();
+                return accept;
+            }
+            return reject;
+        }
+
+        TouchArea {
+            enabled: root.enabled;
+            clicked => { root.activated(); }
+        }
+    }
+}
+
+export component DetailsSurface inherits Rectangle {
+    in property <string> title;
+    in property <string> state-label: title;
+    in property <string> dismiss-label: "Закрыть подробности";
+    callback dismissed();
+
+    background: Theme.surface;
+    border-color: Theme.line;
+    border-width: 1px;
+    border-radius: Theme.radius-large;
+    accessible-role: groupbox;
+    accessible-label: root.state-label;
+
+    Text {
+        x: Theme.space-4;
+        y: Theme.space-2;
+        width: parent.width - 76px;
+        height: Theme.interactive-min;
+        text: root.title;
+        color: Theme.text-primary;
+        font-family: Theme.font-family;
+        font-size: Theme.type-label-size;
+        font-weight: Theme.weight-semibold;
+        vertical-alignment: center;
+        overflow: elide;
+        accessible-role: none;
+    }
+
+    close-action := Rectangle {
+        x: parent.width - self.width - Theme.space-2;
+        y: Theme.space-2;
+        width: Theme.interactive-min;
+        height: Theme.interactive-min;
+        background: close-touch.has-hover ? Theme.elevated : transparent;
+        border-color: close-focus.has-focus ? Theme.focus : transparent;
+        border-width: close-focus.has-focus ? Theme.focus-width : 0px;
+        border-radius: Theme.radius-small;
+        accessible-role: button;
+        accessible-label: root.dismiss-label + ": " + root.state-label;
+        accessible-action-default => { root.dismissed(); }
+
+        Text {
+            text: "×";
+            color: Theme.text-secondary;
+            font-family: Theme.font-family;
+            font-size: Theme.type-title-size;
+            font-weight: Theme.weight-regular;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+
+        close-focus := FocusScope {
+            focus-on-click: true;
+            focus-on-tab-navigation: true;
+            key-pressed(event) => {
+                if (event.text == " " || event.text == "\n") {
+                    root.dismissed();
+                    return accept;
+                }
+                return reject;
+            }
+
+            close-touch := TouchArea {
+                clicked => { root.dismissed(); }
+            }
+        }
+    }
+
+    Rectangle {
+        x: Theme.space-4;
+        y: 60px;
+        width: parent.width - Theme.space-4 * 2;
+        height: 1px;
+        background: Theme.line;
+    }
+
+    content := Rectangle {
+        x: Theme.space-4;
+        y: 69px;
+        width: parent.width - Theme.space-4 * 2;
+        height: parent.height - 69px - Theme.space-4;
+        background: transparent;
+        @children
+    }
+}

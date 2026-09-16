@@ -1,0 +1,36 @@
+[package]
+name = "multicore-desktop"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+publish = false
+
+[dependencies]
+getrandom = "0.4"
+multicore-release = { path = "../../crates/multicore-update" }
+regex = "1.11"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+slint = { version = "=1.17.0", default-features = false, features = ["std", "backend-winit", "renderer-femtovg", "compat-1-2", "unstable-winit-030"] }
+
+[target.'cfg(windows)'.dependencies]
+tray-icon = { version = "=0.25.1", default-features = false }
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_JobObjects",
+    "Win32_System_Pipes",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[build-dependencies]
+embed-resource = "=3.0.11"
+ico = "=0.5.0"
+slint-build = "=1.17.0"

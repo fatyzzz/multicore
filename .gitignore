@@ -1,0 +1,14 @@
+/target/
+/dist/
+/artifacts/
+/fl8-old-visual/
+/.env
+/.env.*
+/*.pfx
+/*.p12
+/*.cer
+state.md
+session-log.md
+*.log
+.idea/
+.vscode/

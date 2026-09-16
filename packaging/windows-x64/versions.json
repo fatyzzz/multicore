@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "platform": "windows-x64",
+  "build": {
+    "rustToolchain": "1.98.1",
+    "desktopPackage": "multicore-desktop",
+    "daemonPackage": "multicore-daemon",
+    "updaterPackage": "multicore-updater"
+  },
+  "components": {
+    "xray": {
+      "project": "XTLS/Xray-core",
+      "version": "v26.9.9",
+      "commit": "52a412d9e2f5c2a5142b1b4e2ab3771dacb8b120",
+      "license": "MPL-2.0",
+      "asset": {
+        "name": "Xray-windows-64.zip",
+        "url": "https://github.com/XTLS/Xray-core/releases/download/v26.9.9/Xray-windows-64.zip",
+        "sha256": "244deaba2098c2964e49bba90df3707777e5f5f428a82d2f29604015f24beec2",
+        "entry": "xray.exe",
+        "executableSha256": "0d0fc0ea2b05641acb78c01fc36ad694e7b029861b2d5eb93da0e3e9fda9a98f",
+        "maximumExpandedBytes": 268435456
+      },
+      "licenseFile": {
+        "name": "Xray-core-MPL-2.0.txt",
+        "url": "https://raw.githubusercontent.com/XTLS/Xray-core/52a412d9e2f5c2a5142b1b4e2ab3771dacb8b120/LICENSE",
+        "sha256": "1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5"
+      },
+      "source": {
+        "url": "https://github.com/XTLS/Xray-core/archive/52a412d9e2f5c2a5142b1b4e2ab3771dacb8b120.zip",
+        "sha256": "0159e934d908cd176fed51dc61209e546046351928af685b143cad2ebe704831"
+      }
+    },
+    "mihomo": {
+      "project": "MetaCubeX/mihomo",
+      "version": "v1.19.30",
+      "commit": "ac017cdd246ce8bd547653d927e7bf77d7ee73d5",
+      "license": "GPL-3.0-only",
+      "asset": {
+        "name": "mihomo-windows-amd64-compatible-v1.19.30.zip",
+        "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.30/mihomo-windows-amd64-compatible-v1.19.30.zip",
+        "sha256": "289fde5e29d37a5b3326480590d8b3551c5bf7f8737290355c19bce74d57a563",
+        "entry": "mihomo-windows-amd64-compatible.exe",
+        "executableSha256": "6ac25fcb26afe8e1bea24b6e6e80805bf884a33232d12e2d78dfa0b6c529ac14",
+        "maximumExpandedBytes": 268435456
+      },
+      "licenseFile": {
+        "name": "mihomo-GPL-3.0.txt",
+        "url": "https://raw.githubusercontent.com/MetaCubeX/mihomo/ac017cdd246ce8bd547653d927e7bf77d7ee73d5/LICENSE",
+        "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+      },
+      "source": {
+        "url": "https://github.com/MetaCubeX/mihomo/archive/ac017cdd246ce8bd547653d927e7bf77d7ee73d5.zip",
+        "sha256": "d26880078fae7755c7ee9ce718ef6de5806d76c8d289237ec926b6a2f35d69be"
+      }
+    }
+  }
+}

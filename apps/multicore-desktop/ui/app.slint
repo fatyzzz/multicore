@@ -1,0 +1,818 @@
+import { LineEdit, ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { PrimaryAction, QuietChip, RouteNodeRow } from "components.slint";
+import "../assets/fonts/Twemoji.Mozilla.ttf";
+
+export struct UiEvent {
+    timestamp: string,
+    component: string,
+    level: string,
+    message: string,
+}
+
+export struct UiCatalogGroup {
+    id: string,
+    icon: string,
+    label: string,
+    selected: bool,
+}
+
+export struct UiCatalogNode {
+    id: string,
+    icon: string,
+    label: string,
+    selected: bool,
+    latency-text: string,
+}
+
+export struct UiProxyMapping {
+    proxy-name: string,
+    address: string,
+    xray-label: string,
+}
+
+component NavItem inherits Rectangle {
+    in property <string> label;
+    in property <image> icon-source;
+    in property <bool> active;
+    callback activated();
+
+    height: 44px;
+    background: root.active ? Theme.elevated : nav-touch.has-hover ? #ffffff08 : transparent;
+    border-radius: 8px;
+    border-width: nav-focus.has-focus ? 2px : 0px;
+    border-color: Theme.focus;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { root.activated(); }
+
+    Rectangle {
+        x: 0;
+        y: 10px;
+        width: 3px;
+        height: 24px;
+        border-radius: 2px;
+        background: root.active ? Theme.accent-blue : transparent;
+    }
+
+    Image {
+        x: 16px;
+        y: 12px;
+        width: 20px;
+        height: 20px;
+        source: root.icon-source;
+        image-fit: contain;
+    }
+
+    Text {
+        x: 48px;
+        width: parent.width - 60px;
+        height: parent.height;
+        text: root.label;
+        color: root.active ? Theme.text-primary : Theme.text-secondary;
+        font-family: Theme.font-family;
+        font-size: Theme.type-label-size;
+        font-weight: root.active ? Theme.weight-semibold : Theme.weight-regular;
+        vertical-alignment: center;
+    }
+
+    nav-focus := FocusScope {
+        focus-on-click: true;
+        focus-on-tab-navigation: true;
+        key-pressed(event) => {
+            if (event.text == " " || event.text == "\n") {
+                root.activated();
+                return accept;
+            }
+            return reject;
+        }
+        nav-touch := TouchArea { clicked => { root.activated(); } }
+    }
+}
+
+component SmallAction inherits Rectangle {
+    in property <string> label;
+    in property <bool> enabled: true;
+    callback activated();
+
+    min-width: 88px;
+    preferred-width: small-label.preferred-width + 28px;
+    max-width: 160px;
+    horizontal-stretch: 0;
+    height: 36px;
+    background: root.enabled ? (small-touch.pressed ? Theme.elevated : small-touch.has-hover ? #ffffff0d : transparent) : transparent;
+    border-color: small-focus.has-focus ? Theme.focus : Theme.line;
+    border-width: small-focus.has-focus ? 2px : 1px;
+    border-radius: 8px;
+    opacity: root.enabled ? 1 : 0.45;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if (root.enabled) { root.activated(); } }
+
+    small-label := Text {
+        text: root.label;
+        color: Theme.text-secondary;
+        font-family: Theme.font-family;
+        font-size: Theme.type-metadata-size;
+        font-weight: Theme.weight-semibold;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    small-focus := FocusScope {
+        enabled: root.enabled;
+        focus-on-click: true;
+        focus-on-tab-navigation: true;
+        key-pressed(event) => {
+            if (event.text == " " || event.text == "\n") {
+                root.activated();
+                return accept;
+            }
+            return reject;
+        }
+        small-touch := TouchArea { enabled: root.enabled; clicked => { root.activated(); } }
+    }
+}
+
+component HealthRow inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <string> tone;
+
+    height: 46px;
+    background: transparent;
+    border-color: Theme.line;
+    border-width: 0px;
+
+    Rectangle {
+        x: 0;
+        y: 19px;
+        width: 8px;
+        height: 8px;
+        border-radius: 4px;
+        background: root.tone == "success" ? Theme.accent-green : root.tone == "danger" ? Theme.error : root.tone == "warning" ? Theme.warning : Theme.text-muted;
+    }
+    Text {
+        x: 20px;
+        width: parent.width - 140px;
+        height: parent.height;
+        text: root.label;
+        color: Theme.text-primary;
+        font-family: Theme.font-family;
+        font-size: Theme.type-label-size;
+        vertical-alignment: center;
+    }
+    Text {
+        x: parent.width - 120px;
+        width: 120px;
+        height: parent.height;
+        text: root.value;
+        color: Theme.text-secondary;
+        font-family: Theme.font-family;
+        font-size: Theme.type-metadata-size;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+    }
+}
+
+component ToggleRow inherits Rectangle {
+    in property <string> label;
+    in property <string> description;
+    in property <bool> checked;
+    in property <bool> enabled: true;
+    callback toggled(bool);
+
+    height: 64px;
+    background: toggle-touch.has-hover && root.enabled ? #ffffff06 : transparent;
+    border-radius: 8px;
+    accessible-role: checkbox;
+    accessible-label: root.label;
+    accessible-checked: root.checked;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if (root.enabled) { root.toggled(!root.checked); } }
+
+    Text {
+        x: 0;
+        y: 9px;
+        width: parent.width - 72px;
+        text: root.label;
+        color: Theme.text-primary;
+        font-family: Theme.font-family;
+        font-size: Theme.type-label-size;
+        font-weight: Theme.weight-semibold;
+    }
+    Text {
+        x: 0;
+        y: 33px;
+        width: parent.width - 72px;
+        text: root.description;
+        color: Theme.text-muted;
+        font-family: Theme.font-family;
+        font-size: Theme.type-metadata-size;
+        overflow: elide;
+    }
+    Rectangle {
+        x: parent.width - 52px;
+        y: 18px;
+        width: 44px;
+        height: 26px;
+        border-radius: 13px;
+        background: root.checked ? Theme.accent-blue : Theme.elevated;
+        border-color: toggle-focus.has-focus ? Theme.focus : root.checked ? Theme.accent-blue : Theme.line;
+        border-width: toggle-focus.has-focus ? 2px : 1px;
+        Rectangle {
+            x: root.checked ? 21px : 3px;
+            y: 3px;
+            width: 18px;
+            height: 18px;
+            border-radius: 9px;
+            background: root.enabled ? Theme.text-primary : Theme.text-muted;
+        }
+    }
+    toggle-focus := FocusScope {
+        enabled: root.enabled;
+        focus-on-click: true;
+        focus-on-tab-navigation: true;
+        key-pressed(event) => {
+            if (event.text == " " || event.text == "\n") {
+                root.toggled(!root.checked);
+                return accept;
+            }
+            return reject;
+        }
+        toggle-touch := TouchArea { enabled: root.enabled; clicked => { root.toggled(!root.checked); } }
+    }
+}
+
+component TitleBarButton inherits Rectangle {
+    in property <string> kind;
+    in property <string> state-label;
+    callback activated();
+
+    width: 44px;
+    height: 44px;
+    background: title-touch.pressed
+        ? (root.kind == "close" ? #b52b38 : #ffffff16)
+        : title-touch.has-hover
+            ? (root.kind == "close" ? #c42b3a : #ffffff0d)
+            : transparent;
+    border-width: title-focus.has-focus ? 2px : 0px;
+    border-color: Theme.focus;
+    accessible-role: button;
+    accessible-label: root.state-label;
+    accessible-action-default => { root.activated(); }
+
+    if root.kind == "minimize": Rectangle {
+        x: 17px;
+        y: 22px;
+        width: 10px;
+        height: 1px;
+        background: Theme.text-secondary;
+    }
+
+    if root.kind == "maximize": Rectangle {
+        x: 17px;
+        y: 17px;
+        width: 10px;
+        height: 10px;
+        background: transparent;
+        border-width: 1px;
+        border-color: Theme.text-secondary;
+    }
+
+    if root.kind == "restore": Rectangle {
+        x: 16px;
+        y: 18px;
+        width: 9px;
+        height: 8px;
+        background: transparent;
+        border-width: 1px;
+        border-color: Theme.text-secondary;
+        Rectangle {
+            x: 2px;
+            y: -3px;
+            width: 9px;
+            height: 8px;
+            background: #0a0c0f;
+            border-width: 1px;
+            border-color: Theme.text-secondary;
+        }
+    }
+
+    if root.kind == "close": Image {
+        x: 16px;
+        y: 16px;
+        width: 12px;
+        height: 12px;
+        source: @image-url("../assets/close.svg");
+        image-fit: contain;
+    }
+
+    title-focus := FocusScope {
+        focus-on-click: true;
+        focus-on-tab-navigation: true;
+        key-pressed(event) => {
+            if (event.text == " " || event.text == "\n") {
+                root.activated();
+                return accept;
+            }
+            return reject;
+        }
+        title-touch := TouchArea { clicked => { root.activated(); } }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "MultiCore";
+    icon: @image-url("../assets/app-icon.svg");
+    no-frame: true;
+    preferred-width: 820px;
+    preferred-height: 760px;
+    min-width: 700px;
+    min-height: 660px;
+    max-width: 1120px;
+    max-height: 1000px;
+    background: Theme.canvas;
+    default-font-family: Theme.font-family;
+
+    in property <string> status-eyebrow: "Профиль не добавлен";
+    in property <string> headline: "Добавьте подписку";
+    in property <string> supporting: "Вставьте URL — остальное настроим автоматически.";
+    in property <string> profile-name: "Нет профиля";
+    in property <string> node-name: "Авто";
+    in property <bool> has-profile: false;
+    in property <bool> state-busy: false;
+    in property <string> primary-label: "Подключить";
+    in property <bool> primary-enabled: false;
+    in property <string> status-label: "Готово";
+    in property <string> status-tone: "neutral";
+    in property <bool> import-pending: false;
+    in property <string> import-error;
+    in property <string> subscription-source: "Подписка";
+    in property <string> subscription-usage: "Нет данных";
+    in property <string> subscription-expiry: "Добавьте ссылку";
+    in property <bool> subscription-refresh-available: false;
+    in property <bool> subscription-refresh-enabled: false;
+    in property <bool> subscription-refresh-pending: false;
+    in property <string> subscription-refresh-error;
+    in property <string> active-panel: "none";
+    in-out property <string> event-filter: "Все";
+    in property <[UiEvent]> events;
+    in property <[UiCatalogGroup]> catalog-groups;
+    in property <[UiCatalogNode]> catalog-nodes;
+    in property <bool> catalog-loading: false;
+    in property <bool> catalog-selection-enabled: false;
+    in property <bool> catalog-selection-pending: false;
+    in property <bool> catalog-selection-queued: false;
+    in property <string> catalog-error;
+    in property <bool> latency-check-enabled: false;
+    in property <bool> latency-check-loading: false;
+    in property <bool> latency-check-queued: false;
+    in property <string> latency-check-error;
+    in property <string> diagnostics-xray-value: "Остановлен";
+    in property <string> diagnostics-xray-tone: "neutral";
+    in property <string> diagnostics-mihomo-value: "Остановлен";
+    in property <string> diagnostics-mihomo-tone: "neutral";
+    in property <string> diagnostics-tun-value: "Остановлен";
+    in property <string> diagnostics-tun-tone: "neutral";
+    in property <bool> diagnostics-loading: false;
+    in property <[UiProxyMapping]> diagnostic-mappings;
+    in property <bool> launch-at-sign-in-enabled: false;
+    in property <bool> launch-at-sign-in-stale: false;
+    in property <string> launch-at-sign-in-error;
+    in-out property <bool> replace-editor-open: false;
+    in-out property <int> import-success-serial: 0;
+    in property <bool> update-available: false;
+    in property <bool> update-runtime-safe: false;
+    in property <string> update-status: "MultiCore 0.1.0";
+    in property <string> update-detail: "Канал обновлений не настроен";
+    in property <string> update-action-label;
+    in property <bool> update-action-enabled: false;
+    in property <bool> update-busy: false;
+
+    in-out property <string> local-page: "home";
+    private property <string> visible-page: root.active-panel == "routes" ? "routes" : root.active-panel == "events" ? "status" : root.local-page;
+    private property <bool> catalog-group-navigation-enabled: !root.catalog-loading && root.catalog-groups.length > 0;
+    in-out property <string> subscription-draft;
+
+    callback import-url(string);
+    callback refresh-subscription();
+    callback primary-action();
+    callback open-panel(string);
+    callback close-panel();
+    callback escape-pressed();
+    callback filter-events(string);
+    callback select-catalog-group(string);
+    callback select-catalog-node(string);
+    callback check-latencies();
+    callback set-launch-at-sign-in(bool);
+    callback window-drag();
+    callback window-minimize();
+    callback window-toggle-maximize();
+    callback window-close();
+    callback update-action();
+
+    changed import-success-serial => {
+        if (root.import-success-serial > 0) {
+            root.replace-editor-open = false;
+            root.subscription-draft = "";
+        }
+    }
+
+    global-keys := FocusScope {
+        width: parent.width;
+        height: parent.height;
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                root.escape-pressed();
+                return accept;
+            }
+            return reject;
+        }
+
+        VerticalLayout {
+            spacing: 0px;
+
+            title-bar := Rectangle {
+                height: 44px;
+                background: #0a0c0f;
+                border-color: Theme.line;
+                border-width: 0px;
+
+                drag-region := Rectangle {
+                    x: 0px;
+                    y: 0px;
+                    width: parent.width - 132px;
+                    height: parent.height;
+                    background: transparent;
+
+                    Image {
+                        x: 14px;
+                        y: 12px;
+                        width: 20px;
+                        height: 20px;
+                        source: @image-url("../assets/app-icon.svg");
+                        image-fit: contain;
+                    }
+
+                    Text {
+                        x: 42px;
+                        width: 112px;
+                        height: parent.height;
+                        text: "MULTICORE";
+                        color: Theme.text-secondary;
+                        font-family: Theme.font-family;
+                        font-size: Theme.type-metadata-size;
+                        font-weight: Theme.weight-bold;
+                        letter-spacing: 1px;
+                        vertical-alignment: center;
+                    }
+
+                    if root.update-available: Rectangle {
+                        x: 151px;
+                        y: 17px;
+                        width: 6px;
+                        height: 6px;
+                        border-radius: 3px;
+                        background: Theme.accent-blue;
+                    }
+
+                    drag-touch := TouchArea {
+                        moved => { root.window-drag(); }
+                        double-clicked => { root.window-toggle-maximize(); }
+                    }
+                }
+
+                TitleBarButton { x: parent.width - 132px; kind: "minimize"; state-label: "Свернуть окно"; activated => { root.window-minimize(); } }
+                TitleBarButton { x: parent.width - 88px; kind: root.maximized ? "restore" : "maximize"; state-label: "Развернуть или восстановить окно"; activated => { root.window-toggle-maximize(); } }
+                TitleBarButton { x: parent.width - 44px; kind: "close"; state-label: "Закрыть MultiCore"; activated => { root.window-close(); } }
+            }
+
+            HorizontalLayout {
+                spacing: 0px;
+
+        navigation-rail := Rectangle {
+            width: 176px;
+            background: #0a0c0f;
+            border-color: Theme.line;
+            border-width: 0px;
+
+            VerticalLayout {
+                padding: 16px;
+                spacing: 8px;
+
+                NavItem { icon-source: @image-url("../assets/home.svg"); label: "Главная"; active: root.visible-page == "home"; activated => { root.local-page = "home"; root.close-panel(); } }
+                NavItem { icon-source: @image-url("../assets/status.svg"); label: "Состояние"; active: root.visible-page == "status"; activated => { root.local-page = "status"; root.open-panel("events"); } }
+                NavItem { icon-source: @image-url("../assets/settings.svg"); label: "Настройки"; active: root.visible-page == "settings"; activated => { root.local-page = "settings"; root.close-panel(); } }
+
+                Rectangle { vertical-stretch: 1; background: transparent; }
+            }
+        }
+
+        main-pane := Rectangle {
+            background: Theme.canvas;
+
+            if root.visible-page == "home": Rectangle {
+                background: transparent;
+                VerticalLayout {
+                    padding: 20px;
+                    spacing: 10px;
+
+                    HorizontalLayout {
+                        height: 32px;
+                        Text { text: "Главная"; color: Theme.text-primary; font-size: 20px; font-weight: Theme.weight-semibold; vertical-alignment: center; }
+                        Rectangle { horizontal-stretch: 1; background: transparent; }
+                        Text { text: root.profile-name; color: Theme.text-muted; font-size: Theme.type-metadata-size; vertical-alignment: center; overflow: elide; }
+                    }
+
+                    connection-strip := Rectangle {
+                        height: 96px;
+                        background: Theme.surface;
+                        border-radius: 18px;
+                        HorizontalLayout {
+                            padding: 14px;
+                            spacing: 16px;
+                            alignment: center;
+                            if root.has-profile: power-action := FocusScope {
+                                width: 68px;
+                                height: 68px;
+                                enabled: root.primary-enabled;
+                                focus-on-click: true;
+                                focus-on-tab-navigation: true;
+                                accessible-role: button;
+                                accessible-label: root.primary-label;
+                                accessible-enabled: root.primary-enabled;
+                                accessible-action-default => {
+                                    if (root.primary-enabled) {
+                                        root.primary-action();
+                                    }
+                                }
+                                key-pressed(event) => {
+                                    if ((event.text == " " || event.text == "\n") && root.primary-enabled) {
+                                        root.primary-action();
+                                        return accept;
+                                    }
+                                    return reject;
+                                }
+
+                                power-button := Rectangle {
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                    width: power-touch.pressed ? 65px : 68px;
+                                    height: power-touch.pressed ? 65px : 68px;
+                                    border-radius: self.width / 2;
+                                    background: root.status-tone == "success" ? #3ccb7f20 : root.status-tone == "danger" ? #f06a6a1f : #4c9dff1c;
+                                    border-color: power-action.has-focus ? Theme.focus : root.status-tone == "success" ? Theme.accent-green : root.status-tone == "danger" ? Theme.error : Theme.accent-blue;
+                                    border-width: power-action.has-focus ? Theme.focus-width : 1px;
+                                    opacity: root.primary-enabled ? 1 : 0.45;
+
+                                    Image {
+                                        x: (parent.width - 26px) / 2;
+                                        y: (parent.height - 26px) / 2 - 1px;
+                                        width: 26px;
+                                        height: 26px;
+                                        source: @image-url("../assets/power.svg");
+                                        image-fit: contain;
+                                        accessible-role: none;
+                                    }
+                                    power-touch := TouchArea {
+                                        enabled: root.primary-enabled;
+                                        clicked => { root.primary-action(); }
+                                    }
+                                }
+                            }
+                            VerticalLayout {
+                                spacing: 2px;
+                                Text { text: root.status-eyebrow; color: Theme.text-muted; font-size: Theme.type-metadata-size; font-weight: Theme.weight-semibold; overflow: elide; }
+                                Text { text: root.headline; color: Theme.text-primary; font-size: 18px; font-weight: Theme.weight-semibold; overflow: elide; }
+                                Text { text: root.node-name + (root.supporting == "" ? "" : " · " + root.supporting); color: Theme.text-secondary; font-size: Theme.type-metadata-size; overflow: elide; }
+                            }
+                            if !root.has-profile: PrimaryAction {
+                                width: 164px;
+                                label: "Добавить URL";
+                                state-label: "Добавить подписку";
+                                enabled: !root.import-pending;
+                                activated => {
+                                    root.local-page = "settings";
+                                    root.replace-editor-open = true;
+                                    root.close-panel();
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        height: 60px;
+                        background: Theme.surface;
+                        border-radius: 12px;
+                        HorizontalLayout {
+                            padding-left: 16px;
+                            padding-right: 12px;
+                            padding-top: 12px;
+                            padding-bottom: 8px;
+                            spacing: 12px;
+                            VerticalLayout {
+                                spacing: 4px;
+                                Text { text: root.subscription-source; color: Theme.text-primary; font-size: Theme.type-label-size; font-weight: Theme.weight-semibold; overflow: elide; }
+                                Text { text: root.subscription-usage + " · " + root.subscription-expiry; color: Theme.text-muted; font-size: Theme.type-metadata-size; overflow: elide; }
+                                if root.subscription-refresh-error != "": Text { text: root.subscription-refresh-error; color: Theme.error; font-size: Theme.type-metadata-size; overflow: elide; }
+                            }
+                            SmallAction { label: root.subscription-refresh-pending ? "Обновляем…" : "Обновить"; enabled: root.subscription-refresh-enabled && !root.subscription-refresh-pending; activated => { root.refresh-subscription(); } }
+                        }
+                    }
+
+                    inline-routes := Rectangle {
+                        vertical-stretch: 1;
+                        min-height: 270px;
+                        background: transparent;
+                        VerticalLayout {
+                            spacing: 8px;
+                            HorizontalLayout {
+                                height: 44px;
+                                spacing: 12px;
+                                Text { text: "Маршруты"; color: Theme.text-primary; font-size: Theme.type-label-size; font-weight: Theme.weight-semibold; vertical-alignment: center; }
+                                Rectangle { horizontal-stretch: 1; background: transparent; }
+                                if root.catalog-selection-queued || root.catalog-selection-pending || root.latency-check-queued: Text { text: root.catalog-selection-queued ? "После подключения" : root.catalog-selection-pending ? "Применяем…" : "Проверим после подключения"; color: Theme.warning; font-size: Theme.type-metadata-size; vertical-alignment: center; overflow: elide; }
+                                SmallAction { label: root.latency-check-loading ? "Проверяем…" : root.latency-check-queued ? "Ожидает" : "Проверить"; enabled: root.latency-check-enabled; activated => { root.check-latencies(); } }
+                            }
+                            ScrollView {
+                                height: 48px;
+                                horizontal-stretch: 1;
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    for group in root.catalog-groups: QuietChip {
+                                        min-width: 112px;
+                                        height: 44px;
+                                        icon: group.icon;
+                                        label: group.label;
+                                        selected: group.selected;
+                                        enabled: root.catalog-group-navigation-enabled;
+                                        activated => { root.select-catalog-group(group.id); }
+                                    }
+                                }
+                            }
+                            if root.catalog-error != "" || root.latency-check-error != "": Text { height: 28px; text: root.catalog-error != "" ? root.catalog-error : root.latency-check-error; color: Theme.error; font-size: Theme.type-metadata-size; wrap: word-wrap; }
+                            ScrollView {
+                                vertical-stretch: 1;
+                                VerticalLayout {
+                                    spacing: 4px;
+                                    for node in root.catalog-nodes: RouteNodeRow {
+                                        height: 46px;
+                                        icon: node.icon;
+                                        label: node.label;
+                                        supporting-text: "";
+                                        trailing-text: node.latency-text;
+                                        selected: node.selected;
+                                        pending: root.catalog-selection-pending && node.selected;
+                                        enabled: root.catalog-selection-enabled;
+                                        activated => { root.select-catalog-node(node.id); }
+                                    }
+                                    if root.catalog-nodes.length == 0: Text { height: 52px; text: root.catalog-loading ? "Загружаем маршруты…" : "В этой группе нет доступных серверов"; color: Theme.text-muted; font-size: Theme.type-metadata-size; vertical-alignment: center; horizontal-alignment: center; }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if root.visible-page == "status": Rectangle {
+                background: transparent;
+                VerticalLayout {
+                    padding: 28px;
+                    spacing: 16px;
+                    HorizontalLayout {
+                        height: 34px;
+                        Text { text: "Состояние"; color: Theme.text-primary; font-size: 20px; font-weight: Theme.weight-semibold; vertical-alignment: center; }
+                        Rectangle { horizontal-stretch: 1; background: transparent; }
+                        Text { text: root.diagnostics-loading ? "Обновляем…" : "Локальная диагностика"; color: Theme.text-muted; font-size: Theme.type-metadata-size; vertical-alignment: center; }
+                    }
+                    Rectangle {
+                        height: 154px;
+                        background: Theme.surface;
+                        border-radius: 12px;
+                        VerticalLayout {
+                            padding-left: 16px;
+                            padding-right: 16px;
+                            spacing: 0px;
+                            HealthRow { label: "Xray transport"; value: root.diagnostics-xray-value; tone: root.diagnostics-xray-tone; }
+                            HealthRow { label: "Mihomo policy"; value: root.diagnostics-mihomo-value; tone: root.diagnostics-mihomo-tone; }
+                            HealthRow { label: "TUN MultiCore"; value: root.diagnostics-tun-value; tone: root.diagnostics-tun-tone; }
+                        }
+                    }
+                    Text { height: 24px; text: "Маппинг Mihomo → Xray"; color: Theme.text-primary; font-size: Theme.type-label-size; font-weight: Theme.weight-semibold; }
+                    ScrollView {
+                        height: root.diagnostic-mappings.length > 0 ? 138px : 44px;
+                        VerticalLayout {
+                            spacing: 0px;
+                            for mapping in root.diagnostic-mappings: Rectangle {
+                                height: 42px;
+                                border-color: Theme.line;
+                                border-width: 0px;
+                                HorizontalLayout {
+                                    spacing: 12px;
+                                    Text { text: mapping.proxy-name; color: Theme.text-primary; font-size: Theme.type-metadata-size; vertical-alignment: center; overflow: elide; }
+                                    Text { width: 128px; text: mapping.address; color: Theme.text-muted; font-size: Theme.type-metadata-size; horizontal-alignment: right; vertical-alignment: center; }
+                                    Text { width: 132px; text: mapping.xray-label; color: Theme.text-secondary; font-size: Theme.type-metadata-size; horizontal-alignment: right; vertical-alignment: center; overflow: elide; }
+                                }
+                            }
+                            if root.diagnostic-mappings.length == 0: Text { height: 42px; text: "Маппинги появятся после загрузки подписки"; color: Theme.text-muted; font-size: Theme.type-metadata-size; vertical-alignment: center; }
+                        }
+                    }
+                    HorizontalLayout {
+                        height: 38px;
+                        spacing: 8px;
+                        SmallAction { label: "Все"; activated => { root.filter-events("Все"); } }
+                        SmallAction { label: "Система"; activated => { root.filter-events("Система"); } }
+                        SmallAction { label: "Ошибки"; activated => { root.filter-events("Ошибки"); } }
+                        Rectangle { horizontal-stretch: 1; background: transparent; }
+                    }
+                    ScrollView {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            spacing: 8px;
+                            for event in root.events: Rectangle {
+                                height: 56px;
+                                background: #ffffff04;
+                                border-radius: 8px;
+                                VerticalLayout {
+                                    padding: 8px;
+                                    spacing: 3px;
+                                    Text { text: event.component + (event.timestamp == "" ? "" : " · " + event.timestamp); color: event.level == "error" ? Theme.error : Theme.text-muted; font-size: Theme.type-metadata-size; font-weight: Theme.weight-semibold; }
+                                    Text { text: event.message; color: Theme.text-secondary; font-size: Theme.type-metadata-size; wrap: word-wrap; }
+                                }
+                            }
+                            if root.events.length == 0: Text { height: 56px; text: "Событий пока нет"; color: Theme.text-muted; font-size: Theme.type-label-size; vertical-alignment: center; horizontal-alignment: center; }
+                        }
+                    }
+                }
+            }
+
+            if root.visible-page == "settings": Rectangle {
+                background: transparent;
+                VerticalLayout {
+                    padding: 28px;
+                    spacing: 18px;
+                    Text { height: 30px; text: "Настройки"; color: Theme.text-primary; font-size: 20px; font-weight: Theme.weight-semibold; }
+                    Text { height: 24px; text: "Windows"; color: Theme.text-primary; font-size: Theme.type-label-size; font-weight: Theme.weight-semibold; }
+                    ToggleRow {
+                        label: "Запускать при входе в Windows";
+                        description: root.launch-at-sign-in-stale ? "Путь приложения изменился — включите заново" : "Открывать MultiCore после входа в систему";
+                        checked: root.launch-at-sign-in-enabled;
+                        toggled(value) => { root.set-launch-at-sign-in(value); }
+                    }
+                    if root.launch-at-sign-in-error != "": Text { height: 34px; text: root.launch-at-sign-in-error; color: Theme.error; font-size: Theme.type-metadata-size; wrap: word-wrap; }
+                    Rectangle { height: 1px; background: Theme.line; }
+                    HorizontalLayout {
+                        height: 52px;
+                        VerticalLayout {
+                            spacing: 4px;
+                            Text { text: "Подписка"; color: Theme.text-primary; font-size: Theme.type-label-size; font-weight: Theme.weight-semibold; }
+                            Text { text: root.subscription-source; color: Theme.text-muted; font-size: Theme.type-metadata-size; overflow: elide; }
+                        }
+                        SmallAction { label: root.replace-editor-open ? "Скрыть" : "Изменить URL"; activated => { root.replace-editor-open = !root.replace-editor-open; } }
+                    }
+                    if root.replace-editor-open: Rectangle {
+                        height: 116px;
+                        background: Theme.surface;
+                        border-radius: 12px;
+                        VerticalLayout {
+                            padding: 12px;
+                            spacing: 8px;
+                            LineEdit { text <=> root.subscription-draft; placeholder-text: "https://example.com/subscription"; enabled: !root.import-pending; }
+                            HorizontalLayout {
+                                if root.import-error != "": Text { text: root.import-error; color: Theme.error; font-size: Theme.type-metadata-size; wrap: word-wrap; }
+                                Rectangle { horizontal-stretch: 1; background: transparent; }
+                                SmallAction { label: root.import-pending ? "Проверяем…" : "Сохранить"; enabled: !root.import-pending && root.subscription-draft != ""; activated => { root.import-url(root.subscription-draft); } }
+                            }
+                        }
+                    }
+                    Rectangle { height: 1px; background: Theme.line; }
+                    HorizontalLayout {
+                        height: 64px;
+                        spacing: 16px;
+                        VerticalLayout {
+                            spacing: 4px;
+                            Text { text: root.update-status; color: Theme.text-primary; font-size: Theme.type-label-size; font-weight: Theme.weight-semibold; overflow: elide; }
+                            Text {
+                                text: root.update-available && !root.update-runtime-safe ? "Отключитесь, чтобы установить обновление" : root.update-detail;
+                                color: root.update-available && !root.update-runtime-safe ? Theme.warning : Theme.text-muted;
+                                font-size: Theme.type-metadata-size;
+                                overflow: elide;
+                            }
+                        }
+                        if root.update-action-label != "": SmallAction {
+                            label: root.update-action-label;
+                            enabled: root.update-action-enabled && (!root.update-available || root.update-runtime-safe) && !root.update-busy;
+                            activated => { root.update-action(); }
+                        }
+                    }
+                    Rectangle { vertical-stretch: 1; background: transparent; }
+                    Text { height: 24px; text: "MultiCore · Mihomo 1.19.30 · Xray 26.9.9"; color: Theme.text-muted; font-size: Theme.type-metadata-size; }
+                }
+            }
+            }
+        }
+        }
+    }
+}

@@ -1,0 +1,28 @@
+[package]
+name = "multicore-updater"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+publish = false
+build = "build.rs"
+
+[[bin]]
+name = "multicore-apply"
+path = "src/main.rs"
+
+[dependencies]
+multicore-release = { path = "../../crates/multicore-update" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+] }
+
+[build-dependencies]
+embed-resource = "3.0.11"
+
+[dev-dependencies]
+tempfile = "3"
