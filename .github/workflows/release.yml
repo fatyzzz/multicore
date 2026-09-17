@@ -27,6 +27,10 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Enforce privileged broker release gate
+        shell: pwsh
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/package-windows-release.ps1 -AssertReleaseReady
+
       - name: Install pinned Rust toolchain
         shell: pwsh
         run: |
@@ -65,7 +69,9 @@ jobs:
             -UpdateRepository fatyzzz/multicore `
             -ReleaseAssetPath dist/release/multicore-windows-x64.zip
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-windows-elevation-manifest.ps1 `
-            -ExecutablePath dist/release/multicore-windows-x64/MultiCore.exe
+            -DesktopExecutablePath dist/release/multicore-windows-x64/MultiCore.exe `
+            -DaemonExecutablePath dist/release/multicore-windows-x64/runtime/multicore-daemon.exe `
+            -CoreHostExecutablePath dist/release/multicore-windows-x64/runtime/multicore-core-host.exe
 
       - name: Install pinned Inno Setup
         shell: pwsh

@@ -6,6 +6,7 @@ Set-StrictMode -Version Latest
 
 $RepositoryRoot = Split-Path -Parent $PSScriptRoot
 $Packager = Join-Path $PSScriptRoot 'package-windows-release.ps1'
+$PackagerSource = Get-Content -Raw -LiteralPath $Packager
 $MetadataRoot = Join-Path $RepositoryRoot 'packaging\windows-x64'
 
 function Assert-True {
@@ -169,6 +170,9 @@ function Assert-PackageFailure {
 }
 
 Assert-True (Test-Path -LiteralPath $Packager) 'packager script must exist'
+Assert-True ($PackagerSource.Contains('$PrivilegedBrokerReleaseReady = $false')) 'production release gate marker must remain deliberately false until broker Tasks 2-4 are complete'
+Assert-True ($PackagerSource.Contains('$AssertReleaseReady')) 'packager must expose the explicit CI readiness check'
+Assert-True ($PackagerSource.IndexOf('$PrivilegedBrokerReleaseReady = $false', [StringComparison]::Ordinal) -lt $PackagerSource.IndexOf('function Invoke-PinnedRustBuild', [StringComparison]::Ordinal)) 'release gate must be evaluated before Rust builds or downloads'
 foreach ($required in @('README.md', 'THIRD_PARTY_NOTICES.md', 'licenses\Xray-core-MPL-2.0.txt', 'licenses\mihomo-GPL-3.0.txt')) {
     Assert-True (Test-Path -LiteralPath (Join-Path $MetadataRoot $required)) "metadata file $required must exist"
 }
@@ -198,9 +202,17 @@ try {
     } catch {
         $productionProbeError = $_.Exception.Message
     }
-    Assert-True ($productionProbeError -ceq 'Production packaging builds all Rust executables internally; executable overrides are fixture-only') 'production manifest must match the built-in immutable pin tuple'
+    Assert-True ($productionProbeError -ceq 'Production packaging is disabled until the least-privilege core broker and package inventory are complete (Tasks 2-4).') 'production packaging must fail at the intentional least-privilege release gate'
     Assert-True (-not (Test-Path -LiteralPath $productionProbe)) 'production pin probe must not publish'
     Assert-NoStageResidue $TestRoot 'production pin probe'
+
+    $productionOfflineProbeError = $null
+    try {
+        & $Packager -DestinationPath (Join-Path $TestRoot 'production-offline-probe') -OfflineSourceDirectory $BaseInput -DesktopExecutablePath $Desktop -DaemonExecutablePath $Daemon -UpdaterExecutablePath $Updater | Out-Null
+    } catch {
+        $productionOfflineProbeError = $_.Exception.Message
+    }
+    Assert-True ($productionOfflineProbeError -ceq 'Production packaging is disabled until the least-privilege core broker and package inventory are complete (Tasks 2-4).') 'offline inputs must not bypass the production release gate when the production manifest is selected'
 
     $out1 = Join-Path $TestRoot 'package-one'; $out2 = Join-Path $TestRoot 'package-two'
     $releaseAsset = Join-Path $TestRoot 'multicore-windows-x64.zip'

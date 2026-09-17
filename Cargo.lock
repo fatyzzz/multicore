@@ -3111,6 +3111,7 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
+ "embed-resource",
  "getrandom 0.4.3",
  "http-body-util",
  "multicore-core",

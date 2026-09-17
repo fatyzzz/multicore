@@ -1,6 +1,5 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)]
     [string]$DestinationPath,
     [string]$ManifestPath,
     [string]$OfflineSourceDirectory,
@@ -8,16 +7,32 @@ param(
     [string]$DaemonExecutablePath,
     [string]$UpdaterExecutablePath,
     [string]$UpdateRepository,
-    [string]$ReleaseAssetPath
+    [string]$ReleaseAssetPath,
+    [switch]$AssertReleaseReady
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+# Task 4 may flip this single marker only after the broker and package inventory are complete.
+$PrivilegedBrokerReleaseReady = $false
+$ReleaseGateMessage = 'Production packaging is disabled until the least-privilege core broker and package inventory are complete (Tasks 2-4).'
 $RepositoryRoot = Split-Path -Parent $PSScriptRoot
 $MetadataRoot = Join-Path $RepositoryRoot 'packaging\windows-x64'
 $DefaultManifestPath = Join-Path $MetadataRoot 'versions.json'
 if (-not $ManifestPath) { $ManifestPath = $DefaultManifestPath }
+$manifestCandidate = [IO.Path]::GetFullPath($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($ManifestPath))
+$defaultManifestCandidate = [IO.Path]::GetFullPath($DefaultManifestPath)
+$isFixtureInvocation = $OfflineSourceDirectory -and -not $manifestCandidate.Equals($defaultManifestCandidate, [StringComparison]::OrdinalIgnoreCase)
+if (-not $isFixtureInvocation) {
+    if (-not $PrivilegedBrokerReleaseReady) { throw $ReleaseGateMessage }
+    if ($AssertReleaseReady) {
+        Write-Output 'PASS: privileged broker release gate is open'
+        return
+    }
+}
+if ($AssertReleaseReady) { throw 'AssertReleaseReady is valid only for production packaging readiness checks.' }
+if ([String]::IsNullOrWhiteSpace($DestinationPath)) { throw 'DestinationPath is required.' }
 
 function Get-FullPath { param([string]$Path) [IO.Path]::GetFullPath($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)) }
 function Get-Sha256 { param([string]$Path) (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
