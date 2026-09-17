@@ -48,7 +48,8 @@ Persisted fields:
 - restored window position and size;
 - maximized state;
 - last visible page;
-- active subscription ID;
+- last observed active subscription ID as a desktop restore hint; the daemon profile
+  index remains authoritative;
 - last visible selector group per subscription;
 - confirmed selector choices per subscription and group;
 - ambient background enabled state;

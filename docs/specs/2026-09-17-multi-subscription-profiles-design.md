@@ -32,6 +32,10 @@ Migration never requests the subscription again and never exposes the saved URL.
 
 `profiles/index.json` is versioned and contains only profile IDs, ordering, creation timestamps, and the active profile ID. Credential-bearing source URLs remain only inside each profile's private `subscription.json`. Display metadata is derived from validated profile snapshots instead of duplicated into the index.
 
+The daemon profile index is the authority for the active profile. A desktop preference
+may cache the last observed active ID only as a restore hint; it cannot override a newer
+valid index value and is cleared when that profile no longer exists.
+
 Profile IDs are random UUIDs generated locally. Provider titles and URLs never become directory names.
 
 The initial product limit is 16 profiles. This bounds startup scanning, UI size, and refresh fan-out.
