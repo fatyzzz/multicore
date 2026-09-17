@@ -1,7 +1,7 @@
 use std::{
     ffi::{OsStr, OsString, c_void},
     future::Future,
-    io::{BufRead, BufReader},
+    io::Read,
     mem::{size_of, zeroed},
     os::windows::{
         ffi::OsStrExt,
@@ -36,6 +36,7 @@ use windows_sys::Win32::{
 use crate::{
     CommandSpec, CoreLogBuffer, DiagnosticStream, Engine, ManagedChild, ProcessError,
     ProcessLauncher, RuntimeCheckState, RuntimePaths, TokioProcessLauncher,
+    sidecar::BoundedLogDecoder,
 };
 
 /// Windows launcher whose single job is the lifetime owner of every launched core.
@@ -291,9 +292,18 @@ fn spawn_reader(
     handle: OwnedHandle,
 ) {
     std::thread::spawn(move || {
-        let file = std::fs::File::from(handle);
-        for line in BufReader::new(file).lines().map_while(Result::ok) {
-            logs.push(engine, stream, &line);
+        let mut file = std::fs::File::from(handle);
+        let mut chunk = [0_u8; 4096];
+        let mut decoder = BoundedLogDecoder::default();
+        loop {
+            match file.read(&mut chunk) {
+                Ok(0) => {
+                    decoder.finish(|line| logs.push(engine, stream, line));
+                    break;
+                }
+                Ok(read) => decoder.feed(&chunk[..read], |line| logs.push(engine, stream, line)),
+                Err(_) => break,
+            }
         }
     });
 }

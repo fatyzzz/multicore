@@ -18,6 +18,15 @@ use multicore_core::{
     TokioProcessLauncher,
 };
 
+const SIDECAR_SOURCE: &str = include_str!("../src/sidecar.rs");
+
+#[test]
+fn tun_readiness_never_spawns_a_path_searched_shell() {
+    assert!(!SIDECAR_SOURCE.contains("powershell.exe"));
+    assert!(!SIDECAR_SOURCE.contains("Get-NetAdapter"));
+    assert!(SIDECAR_SOURCE.contains("GetIfTable2"));
+}
+
 #[derive(Clone, Default)]
 struct FakeLauncher {
     launches: Arc<Mutex<Vec<CommandSpec>>>,

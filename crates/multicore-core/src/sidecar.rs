@@ -16,7 +16,7 @@ use std::{
 
 use thiserror::Error;
 use tokio::{
-    io::{AsyncBufReadExt, AsyncRead, BufReader},
+    io::{AsyncRead, AsyncReadExt},
     net::TcpStream,
     process::Child,
     sync::Mutex,
@@ -534,11 +534,16 @@ fn spawn_log_reader<R>(
     R: AsyncRead + Unpin + Send + 'static,
 {
     tokio::spawn(async move {
-        let mut lines = BufReader::new(reader).lines();
+        let mut reader = reader;
+        let mut chunk = [0_u8; 4096];
+        let mut decoder = BoundedLogDecoder::default();
         loop {
-            match lines.next_line().await {
-                Ok(Some(line)) => logs.push(engine, stream, &line),
-                Ok(None) => break,
+            match reader.read(&mut chunk).await {
+                Ok(0) => {
+                    decoder.finish(|line| logs.push(engine, stream, line));
+                    break;
+                }
+                Ok(read) => decoder.feed(&chunk[..read], |line| logs.push(engine, stream, line)),
                 Err(_) => {
                     logs.push(
                         engine,
@@ -550,6 +555,54 @@ fn spawn_log_reader<R>(
             }
         }
     });
+}
+
+const MAX_CAPTURED_LOG_LINE_BYTES: usize = 4096;
+
+pub(crate) struct BoundedLogDecoder {
+    line: Vec<u8>,
+    overflowed: bool,
+}
+
+impl Default for BoundedLogDecoder {
+    fn default() -> Self {
+        Self {
+            line: Vec::with_capacity(MAX_CAPTURED_LOG_LINE_BYTES),
+            overflowed: false,
+        }
+    }
+}
+
+impl BoundedLogDecoder {
+    pub(crate) fn feed(&mut self, bytes: &[u8], mut emit: impl FnMut(&str)) {
+        for &byte in bytes {
+            if byte == b'\n' {
+                self.emit(&mut emit);
+            } else if self.line.len() < MAX_CAPTURED_LOG_LINE_BYTES {
+                if byte != b'\r' {
+                    self.line.push(byte);
+                }
+            } else {
+                self.overflowed = true;
+            }
+        }
+    }
+
+    pub(crate) fn finish(&mut self, mut emit: impl FnMut(&str)) {
+        if !self.line.is_empty() || self.overflowed {
+            self.emit(&mut emit);
+        }
+    }
+
+    fn emit(&mut self, emit: &mut impl FnMut(&str)) {
+        let mut text = String::from_utf8_lossy(&self.line).into_owned();
+        if self.overflowed {
+            text.push_str(" [truncated]");
+        }
+        emit(&text);
+        self.line.clear();
+        self.overflowed = false;
+    }
 }
 
 fn xray_loopback_inbounds(path: &std::path::Path) -> Result<Vec<std::net::SocketAddr>, ()> {
@@ -608,23 +661,43 @@ fn mihomo_readiness_targets(path: &std::path::Path) -> Result<(std::net::SocketA
 
 #[cfg(windows)]
 async fn tun_device_is_up(device: &str) -> bool {
+    use std::{ffi::c_void, ptr, slice};
+    use windows_sys::Win32::{
+        Foundation::NO_ERROR,
+        NetworkManagement::{
+            IpHelper::{FreeMibTable, GetIfTable2, MIB_IF_TABLE2},
+            Ndis::NET_IF_OPER_STATUS_UP,
+        },
+    };
     if device != "MultiCore" {
         return false;
     }
-    tokio::process::Command::new("powershell.exe")
-        .args([
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "$adapter = Get-NetAdapter -Name 'MultiCore' -ErrorAction SilentlyContinue; if ($null -ne $adapter -and $adapter.Status -eq 'Up') { exit 0 } else { exit 1 }",
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .await
-        .is_ok_and(|status| status.success())
+    struct Table(*const c_void);
+    impl Drop for Table {
+        fn drop(&mut self) {
+            unsafe { FreeMibTable(self.0) }
+        }
+    }
+    let mut table: *mut MIB_IF_TABLE2 = ptr::null_mut();
+    if unsafe { GetIfTable2(&mut table) } != NO_ERROR || table.is_null() {
+        return false;
+    }
+    let _table = Table(table.cast());
+    let rows =
+        unsafe { slice::from_raw_parts((*table).Table.as_ptr(), (*table).NumEntries as usize) };
+    rows.iter().any(|row| {
+        let end = row
+            .Alias
+            .iter()
+            .position(|unit| *unit == 0)
+            .unwrap_or(row.Alias.len());
+        String::from_utf16(&row.Alias[..end])
+            .is_ok_and(|alias| adapter_is_ready(&alias, row.OperStatus == NET_IF_OPER_STATUS_UP))
+    })
+}
+
+fn adapter_is_ready(alias: &str, operational_up: bool) -> bool {
+    alias == "MultiCore" && operational_up
 }
 
 #[cfg(not(windows))]
@@ -752,5 +825,52 @@ impl<L: ProcessLauncher> ProcessController for SidecarProcessController<L> {
                 logs: self.launcher.diagnostic_logs(),
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod bounded_tests {
+    use super::*;
+
+    #[test]
+    fn adapter_requires_exact_alias_and_operational_up() {
+        assert!(adapter_is_ready("MultiCore", true));
+        assert!(!adapter_is_ready("MultiCore", false));
+        assert!(!adapter_is_ready("multicore", true));
+        assert!(!adapter_is_ready("MultiCore Evil", true));
+    }
+
+    #[test]
+    fn unterminated_megabytes_are_bounded_discarded_and_marked() {
+        let mut decoder = BoundedLogDecoder::default();
+        let chunk = vec![b'A'; 8192];
+        let mut records = Vec::new();
+        for _ in 0..256 {
+            decoder.feed(&chunk, |line| records.push(line.to_owned()));
+        }
+        decoder.finish(|line| records.push(line.to_owned()));
+        assert_eq!(records.len(), 1);
+        assert!(records[0].ends_with(" [truncated]"));
+        assert!(records[0].len() <= MAX_CAPTURED_LOG_LINE_BYTES + 32);
+    }
+
+    #[test]
+    fn huge_unterminated_child_output_is_redacted_before_diagnostics() {
+        let logs = CoreLogBuffer::with_limits(2, 2048);
+        let mut decoder = BoundedLogDecoder::default();
+        decoder.feed(b"https://secret.example/token ", |line| {
+            logs.push(Engine::Xray, DiagnosticStream::Stderr, line)
+        });
+        let chunk = vec![b'X'; 8192];
+        for _ in 0..256 {
+            decoder.feed(&chunk, |line| {
+                logs.push(Engine::Xray, DiagnosticStream::Stderr, line)
+            });
+        }
+        decoder.finish(|line| logs.push(Engine::Xray, DiagnosticStream::Stderr, line));
+        let records = logs.snapshot();
+        assert_eq!(records.len(), 1);
+        assert!(!records[0].message.contains("secret.example"));
+        assert!(records[0].message.chars().count() <= 2048);
     }
 }

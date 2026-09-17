@@ -33,7 +33,10 @@ impl Controller for ProductionController {
         &'a self,
         engine: Engine,
     ) -> Pin<Box<dyn Future<Output = Result<(), ()>> + Send + 'a>> {
-        Box::pin(async move { self.controller.start(engine).await.map_err(|_| ()) })
+        Box::pin(async move {
+            self._validated_files.verify_unchanged().map_err(|_| ())?;
+            self.controller.start(engine).await.map_err(|_| ())
+        })
     }
     fn stop<'a>(
         &'a self,
