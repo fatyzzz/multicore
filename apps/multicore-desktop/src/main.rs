@@ -13,10 +13,13 @@ use std::ffi::{OsStr, OsString};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 use daemon::{DaemonClient, DaemonError, UnavailableDaemonClient};
 use slint::winit_030::WinitWindowAccessor;
-use slint::{CloseRequestResponse, ComponentHandle, ModelRc, SharedString, VecModel};
+use slint::{
+    CloseRequestResponse, ComponentHandle, ModelRc, SharedString, Timer, TimerMode, VecModel,
+};
 use tray::{TrayCommand, TrayGroup, TrayInput, TrayMenuModel, build_menu_model};
 use updater::{UpdateAction, UpdateState};
 use view_model::{
@@ -93,7 +96,7 @@ fn main() -> Result<(), slint::PlatformError> {
     wire_event_filter(&ui, model.clone());
     wire_catalog_group(&ui, model.clone());
     wire_catalog_node(&ui, model.clone());
-    wire_latency_check(&ui, model.clone());
+    let _latency_timer = wire_automatic_latency(&ui, model.clone());
     wire_windows_settings(&ui);
     wire_external_activations(&ui, activations);
     let tray_model = tray_menu_model(&model.lock().expect("view model lock"));
@@ -647,6 +650,8 @@ fn wire_panels(ui: &AppWindow, model: Arc<Mutex<DesktopViewModel>>) {
         if let Some(ui) = weak.upgrade() {
             if panel == Panel::Events {
                 ui.set_event_filter("Все".into());
+            } else if panel == Panel::Routes {
+                ui.set_local_page("home".into());
             }
             apply_snapshot(&ui, &current);
         }
@@ -688,6 +693,7 @@ fn wire_catalog_group(ui: &AppWindow, model: Arc<Mutex<DesktopViewModel>>) {
         };
         if let (Some(ui), Some(current)) = (weak.upgrade(), current) {
             apply_snapshot(&ui, &current);
+            begin_latency_check(weak.clone(), model.clone());
         }
     });
 }
@@ -710,11 +716,15 @@ fn wire_catalog_node(ui: &AppWindow, model: Arc<Mutex<DesktopViewModel>>) {
     });
 }
 
-fn wire_latency_check(ui: &AppWindow, model: Arc<Mutex<DesktopViewModel>>) {
+fn wire_automatic_latency(ui: &AppWindow, model: Arc<Mutex<DesktopViewModel>>) -> Timer {
+    let timer = Timer::default();
     let weak = ui.as_weak();
-    ui.on_check_latencies(move || {
-        begin_latency_check(weak.clone(), model.clone());
+    timer.start(TimerMode::Repeated, Duration::from_secs(60), move || {
+        if weak.upgrade().is_some_and(|ui| ui.window().is_visible()) {
+            begin_latency_check(weak.clone(), model.clone());
+        }
     });
+    timer
 }
 
 fn begin_latency_check(weak: slint::Weak<AppWindow>, model: Arc<Mutex<DesktopViewModel>>) {
@@ -1017,11 +1027,14 @@ fn load_catalog(weak: slint::Weak<AppWindow>, model: Arc<Mutex<DesktopViewModel>
         let Some(current) = current else {
             return;
         };
-        let run_queued_latency = current.latency.queued;
-        apply_snapshot_from_worker(weak.clone(), current, model.clone(), false, false);
-        if run_queued_latency {
-            begin_latency_check(weak, model);
-        }
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(ui) = weak.upgrade() {
+                apply_snapshot(&ui, &current);
+            }
+            if current.latency.queued {
+                begin_latency_check(weak, model);
+            }
+        });
     });
 }
 
@@ -1031,7 +1044,9 @@ fn run_latency_check(
     request: LatencyRequest,
 ) {
     thread::spawn(move || {
-        let result = request.client.latencies(request.catalog_revision);
+        let result = request
+            .client
+            .latencies(request.catalog_revision, &request.group_ids);
         let completion = {
             let mut model = model.lock().expect("view model lock");
             model
@@ -1041,10 +1056,16 @@ fn run_latency_check(
         let Some((current, outcome)) = completion else {
             return;
         };
-        apply_snapshot_from_worker(weak.clone(), current, model.clone(), false, false);
-        if outcome.refresh_catalog {
-            load_catalog(weak, model);
-        }
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(ui) = weak.upgrade() {
+                apply_snapshot(&ui, &current);
+            }
+            if outcome.refresh_catalog {
+                load_catalog(weak, model);
+            } else if outcome.rerun {
+                begin_latency_check(weak, model);
+            }
+        });
     });
 }
 
@@ -1109,7 +1130,6 @@ fn apply_snapshot(ui: &AppWindow, snapshot: &UiSnapshot) {
     ui.set_status_eyebrow(SharedString::from(presentation.eyebrow));
     ui.set_headline(presentation.headline.clone().into());
     ui.set_supporting(presentation.supporting.clone().into());
-    ui.set_profile_name(presentation.profile.clone().into());
     ui.set_node_name(presentation.node.clone().into());
     ui.set_has_profile(presentation.has_profile);
     ui.set_state_busy(presentation.is_busy);
@@ -1163,12 +1183,6 @@ fn apply_snapshot(ui: &AppWindow, snapshot: &UiSnapshot) {
     ui.set_diagnostics_loading(snapshot.diagnostics.loading);
     ui.set_latency_check_loading(snapshot.latency.loading);
     ui.set_latency_check_queued(snapshot.latency.queued);
-    ui.set_latency_check_enabled(
-        presentation.has_profile
-            && !presentation.is_busy
-            && !snapshot.latency.loading
-            && !snapshot.latency.queued,
-    );
     ui.set_latency_check_error(snapshot.latency.error.clone().unwrap_or_default().into());
     ui.set_diagnostic_mappings(ModelRc::new(VecModel::from(
         snapshot
@@ -1219,6 +1233,7 @@ fn apply_catalog(ui: &AppWindow, catalog: &CatalogPresentation) {
                 label: display.label.into(),
                 selected: node.selected,
                 latency_text: node.latency_text.clone().into(),
+                latency_tone: node.latency_tone.clone().into(),
             }
         })
         .collect::<Vec<_>>();

@@ -119,6 +119,7 @@ pub(crate) struct LatencyRequest {
     pub(crate) client: Arc<dyn DaemonClient>,
     pub(crate) token: LatencyRequestToken,
     pub(crate) catalog_revision: Option<u64>,
+    pub(crate) group_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -131,6 +132,7 @@ pub(crate) struct LatencyPresentation {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LatencyOutcome {
     pub(crate) refresh_catalog: bool,
+    pub(crate) rerun: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -177,6 +179,7 @@ pub(crate) struct CatalogNodePresentation {
     pub(crate) selected: bool,
     pub(crate) delay_ms: Option<u64>,
     pub(crate) latency_text: String,
+    pub(crate) latency_tone: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -245,7 +248,7 @@ impl UiState {
     pub fn presentation(&self) -> StatePresentation {
         match self {
             Self::Empty => StatePresentation {
-                eyebrow: "ПРОФИЛЬ НЕ ДОБАВЛЕН",
+                eyebrow: "Профиль не добавлен",
                 headline: "Добавьте подписку".into(),
                 supporting: "Вставьте URL — остальное настроим автоматически.".into(),
                 profile: "Нет профиля".into(),
@@ -262,7 +265,7 @@ impl UiState {
                 is_degraded: false,
             },
             Self::Importing => StatePresentation {
-                eyebrow: "ИМПОРТ",
+                eyebrow: "Импорт",
                 headline: "Добавляем профиль…".into(),
                 supporting: "Проверяем подписку и доступные маршруты.".into(),
                 profile: "Новый профиль".into(),
@@ -279,9 +282,9 @@ impl UiState {
                 is_degraded: false,
             },
             Self::Ready { profile, node } => StatePresentation {
-                eyebrow: "ГОТОВО",
+                eyebrow: "Готово",
                 headline: "Можно подключаться".into(),
-                supporting: "Маршрут будет выбран автоматически.".into(),
+                supporting: String::new(),
                 profile: profile.clone(),
                 node: node.clone(),
                 primary_label: "Подключиться",
@@ -300,7 +303,7 @@ impl UiState {
                 node,
                 step,
             } => StatePresentation {
-                eyebrow: "ПОДКЛЮЧЕНИЕ",
+                eyebrow: "Подключение",
                 headline: "Устанавливаем соединение…".into(),
                 supporting: step.clone(),
                 profile: profile.clone(),
@@ -317,7 +320,7 @@ impl UiState {
                 is_degraded: false,
             },
             Self::Connected { profile, node } => StatePresentation {
-                eyebrow: "ПОДКЛЮЧЕНО",
+                eyebrow: "Подключено",
                 headline: "Соединение защищено".into(),
                 supporting: "Текущий маршрут".into(),
                 profile: profile.clone(),
@@ -334,7 +337,7 @@ impl UiState {
                 is_degraded: false,
             },
             Self::Disconnecting { profile, node } => StatePresentation {
-                eyebrow: "ОТКЛЮЧЕНИЕ",
+                eyebrow: "Отключение",
                 headline: "Завершаем соединение…".into(),
                 supporting: "Отключаем локальный маршрут.".into(),
                 profile: profile.clone(),
@@ -351,7 +354,7 @@ impl UiState {
                 is_degraded: false,
             },
             Self::Error { message } => StatePresentation {
-                eyebrow: "НЕ УДАЛОСЬ ПОДКЛЮЧИТЬСЯ",
+                eyebrow: "Не удалось подключиться",
                 headline: "Что-то пошло не так".into(),
                 supporting: message.clone(),
                 profile: "—".into(),
@@ -368,7 +371,7 @@ impl UiState {
                 is_degraded: false,
             },
             Self::DaemonDegraded { message } => StatePresentation {
-                eyebrow: "СЕРВИС НЕДОСТУПЕН",
+                eyebrow: "Сервис недоступен",
                 headline: "Ограниченный режим".into(),
                 supporting: message.clone(),
                 profile: "Состояние неизвестно".into(),
@@ -534,6 +537,7 @@ pub struct DesktopViewModel {
     next_latency_generation: u64,
     latency_request_pending: Option<LatencyRequestToken>,
     latency_request_revision: Option<u64>,
+    latency_request_group_ids: Vec<String>,
     latency_queued: bool,
     latency_error: Option<String>,
 }
@@ -580,6 +584,7 @@ impl DesktopViewModel {
             next_latency_generation: 0,
             latency_request_pending: None,
             latency_request_revision: None,
+            latency_request_group_ids: Vec::new(),
             latency_queued: false,
             latency_error: None,
         }
@@ -595,7 +600,7 @@ impl DesktopViewModel {
             .active_mutation
             .is_some_and(|active| active.kind == MutationKind::DisconnectReconciliation)
         {
-            presentation.eyebrow = "ПРОВЕРКА";
+            presentation.eyebrow = "Проверка";
             presentation.headline = "Проверяем состояние…".into();
             presentation.primary_label = "Проверяем…";
             presentation.pill_label = "ПРОВЕРКА";
@@ -1130,7 +1135,6 @@ impl DesktopViewModel {
         self.next_catalog_generation = self.next_catalog_generation.wrapping_add(1);
         let token = CatalogRequestToken(self.next_catalog_generation);
         self.catalog_request_pending = Some(token);
-        self.catalog_revision = None;
         if self.catalog_notice_after_refresh.is_none() {
             self.catalog_error = None;
         }
@@ -1151,21 +1155,28 @@ impl DesktopViewModel {
     pub(crate) fn begin_latency_request(&mut self) -> Option<LatencyRequest> {
         self.latency_error = None;
         if self.latency_request_pending.is_some() {
-            return None;
-        }
-        if !matches!(self.state, UiState::Connected { .. }) {
             self.latency_queued = true;
             return None;
         }
+        if !matches!(self.state, UiState::Connected { .. })
+            || self.catalog_revision.is_none()
+            || self.selected_catalog_group.is_none()
+        {
+            self.latency_queued = true;
+            return None;
+        }
+        let group_ids = vec![self.selected_catalog_group.clone()?];
         self.next_latency_generation = self.next_latency_generation.wrapping_add(1);
         let token = LatencyRequestToken(self.next_latency_generation);
         self.latency_request_pending = Some(token);
         self.latency_request_revision = self.catalog_revision;
+        self.latency_request_group_ids.clone_from(&group_ids);
         self.latency_queued = false;
         Some(LatencyRequest {
             client: self.client.clone(),
             token,
             catalog_revision: self.catalog_revision,
+            group_ids,
         })
     }
 
@@ -1178,28 +1189,37 @@ impl DesktopViewModel {
             return None;
         }
         self.latency_request_pending = None;
+        let targeted_group_ids = std::mem::take(&mut self.latency_request_group_ids);
         if self.latency_request_revision.take() != self.catalog_revision {
+            self.latency_queued = true;
             return Some(LatencyOutcome {
                 refresh_catalog: false,
+                rerun: true,
             });
         }
         let mut refresh_catalog = false;
         match result {
             Ok(latencies) => {
-                for group in &mut self.catalog_groups {
-                    for node in &mut group.nodes {
-                        let entry = latencies
-                            .entries
-                            .iter()
-                            .find(|entry| entry.group_id == group.id && entry.node_id == node.id);
-                        node.latency_text = entry.map_or_else(String::new, |entry| {
-                            match (entry.status.as_str(), entry.latency_ms) {
-                                ("ok", Some(value)) => format!("{value} ms"),
-                                ("timeout", _) => "таймаут".into(),
-                                ("error" | "unavailable", _) => "нет связи".into(),
-                                _ => "нет данных".into(),
-                            }
-                        });
+                for entry in &latencies.entries {
+                    if !targeted_group_ids.iter().any(|id| id == &entry.group_id) {
+                        continue;
+                    }
+                    if let Some(node) = self
+                        .catalog_groups
+                        .iter_mut()
+                        .find(|group| group.id == entry.group_id)
+                        .and_then(|group| {
+                            group.nodes.iter_mut().find(|node| node.id == entry.node_id)
+                        })
+                    {
+                        let (text, tone) = latency_display(&entry.status, entry.latency_ms);
+                        node.delay_ms = if entry.status == "ok" {
+                            entry.latency_ms
+                        } else {
+                            None
+                        };
+                        node.latency_text = text;
+                        node.latency_tone = tone;
                     }
                 }
                 self.latency_error = None;
@@ -1216,7 +1236,10 @@ impl DesktopViewModel {
                     Some("Не удалось проверить задержку. Повторите попытку.".into());
             }
         }
-        Some(LatencyOutcome { refresh_catalog })
+        Some(LatencyOutcome {
+            refresh_catalog,
+            rerun: self.latency_queued && !refresh_catalog,
+        })
     }
 
     pub(crate) fn finish_catalog(
@@ -1257,6 +1280,7 @@ impl DesktopViewModel {
             return false;
         }
         self.selected_catalog_group = Some(id.to_owned());
+        self.latency_queued = true;
         true
     }
 
@@ -1476,6 +1500,8 @@ impl DesktopViewModel {
     }
 
     fn replace_catalog(&mut self, catalog: DaemonCatalog) {
+        let previous_groups =
+            (self.catalog_revision == Some(catalog.revision)).then(|| self.catalog_groups.clone());
         let preserve_queued = self
             .queued_selections
             .iter()
@@ -1500,26 +1526,53 @@ impl DesktopViewModel {
         self.catalog_groups = catalog
             .groups
             .into_iter()
-            .map(|group| CatalogGroup {
-                is_primary: primary_group_id.as_deref() == Some(group.id.as_str()),
-                id: group.id,
-                label: safe_catalog_label(&group.label),
-                nodes: group
-                    .nodes
-                    .into_iter()
-                    .map(|node| CatalogNodePresentation {
-                        id: node.id,
-                        label: safe_catalog_label(&node.label),
-                        selected: node.selected,
-                        delay_ms: node.delay_ms,
-                        latency_text: node
-                            .delay_ms
-                            .map(|delay| format!("{delay} ms"))
-                            .unwrap_or_default(),
-                    })
-                    .collect(),
+            .map(|group| {
+                let old_group = previous_groups
+                    .as_ref()
+                    .and_then(|groups| groups.iter().find(|old| old.id == group.id));
+                CatalogGroup {
+                    is_primary: primary_group_id.as_deref() == Some(group.id.as_str()),
+                    id: group.id,
+                    label: safe_catalog_label(&group.label),
+                    nodes: group
+                        .nodes
+                        .into_iter()
+                        .map(|node| {
+                            let old_node = old_group.and_then(|old| {
+                                old.nodes.iter().find(|old_node| old_node.id == node.id)
+                            });
+                            // A real delay from the catalog is authoritative. When a
+                            // same-revision reload omits it, preserve the complete last-known
+                            // display tuple so internal data and visible text cannot diverge.
+                            let (delay_ms, latency_text, latency_tone) =
+                                if let Some(delay) = node.delay_ms {
+                                    let (text, tone) = latency_display("ok", Some(delay));
+                                    (Some(delay), text, tone)
+                                } else if let Some(old) = old_node {
+                                    (
+                                        old.delay_ms,
+                                        old.latency_text.clone(),
+                                        old.latency_tone.clone(),
+                                    )
+                                } else {
+                                    (None, String::new(), "neutral".into())
+                                };
+                            CatalogNodePresentation {
+                                id: node.id,
+                                label: safe_catalog_label(&node.label),
+                                selected: node.selected,
+                                delay_ms,
+                                latency_text,
+                                latency_tone,
+                            }
+                        })
+                        .collect(),
+                }
             })
             .collect();
+        if !self.catalog_groups.is_empty() {
+            self.latency_queued = true;
+        }
         if preserve_queued {
             for queued in &self.queued_selections {
                 if let Some(group) = self
@@ -1639,6 +1692,24 @@ fn present_runtime_check(value: Option<&str>, loading: bool) -> RuntimeCheckPres
     RuntimeCheckPresentation {
         value: value.into(),
         tone: tone.into(),
+    }
+}
+
+fn latency_display(status: &str, latency_ms: Option<u64>) -> (String, String) {
+    match (status, latency_ms) {
+        ("ok", Some(value)) => {
+            let tone = if value < 80 {
+                "success"
+            } else if value < 150 {
+                "warning"
+            } else {
+                "danger"
+            };
+            (format!("{value} ms"), tone.into())
+        }
+        ("timeout", _) => ("таймаут".into(), "danger".into()),
+        ("error" | "unavailable", _) => ("нет связи".into(), "danger".into()),
+        _ => ("нет данных".into(), "neutral".into()),
     }
 }
 
@@ -1855,17 +1926,198 @@ mod tests {
                 ..DaemonStatus::default()
             }),
         );
+        let catalog = view_model.begin_catalog_request().expect("catalog request");
+        view_model
+            .finish_catalog(catalog.token, Ok(catalog_fixture()))
+            .expect("catalog completion");
         let request = view_model
             .begin_latency_request()
             .expect("queued latency request after connect");
+        assert_eq!(request.group_ids, vec!["opaque:selected"]);
         assert!(view_model.begin_latency_request().is_none());
         assert!(view_model.latency_presentation().loading);
+        assert!(view_model.latency_presentation().queued);
+
+        let outcome = view_model
+            .finish_latencies(request.token, Ok(DaemonLatencies::default()))
+            .expect("first completion");
+        assert!(outcome.rerun);
+        assert!(view_model.latency_presentation().queued);
+
+        let rerun = view_model
+            .begin_latency_request()
+            .expect("one coalesced rerun");
+        let outcome = view_model
+            .finish_latencies(rerun.token, Ok(DaemonLatencies::default()))
+            .expect("rerun completion");
+        assert!(!outcome.rerun);
+        assert!(!view_model.latency_presentation().queued);
+    }
+
+    #[test]
+    fn first_successful_catalog_load_queues_selected_group_latency() {
+        let mut view_model = DesktopViewModel::new(Arc::new(MockDaemonClient::ready()));
+        let refresh = view_model.begin_refresh();
+        view_model.finish_refresh(
+            refresh,
+            Ok(DaemonStatus {
+                state: "connected".into(),
+                profile: Some("Тестовый".into()),
+                current_node: Some("Авто".into()),
+                ..DaemonStatus::default()
+            }),
+        );
         assert!(!view_model.latency_presentation().queued);
 
-        assert!(
-            view_model
-                .finish_latencies(request.token, Ok(DaemonLatencies::default()))
-                .is_some()
+        let catalog = view_model
+            .begin_catalog_request()
+            .expect("first catalog request");
+        view_model
+            .finish_catalog(catalog.token, Ok(catalog_fixture()))
+            .expect("first catalog completion");
+
+        assert!(view_model.latency_presentation().queued);
+        let request = view_model
+            .begin_latency_request()
+            .expect("automatic selected-group latency");
+        assert_eq!(request.catalog_revision, Some(91));
+        assert_eq!(request.group_ids, vec!["opaque:selected"]);
+    }
+
+    #[test]
+    fn latency_tone_boundaries_are_stable() {
+        assert_eq!(
+            latency_display("ok", Some(79)),
+            ("79 ms".into(), "success".into())
+        );
+        assert_eq!(
+            latency_display("ok", Some(80)),
+            ("80 ms".into(), "warning".into())
+        );
+        assert_eq!(
+            latency_display("ok", Some(149)),
+            ("149 ms".into(), "warning".into())
+        );
+        assert_eq!(
+            latency_display("ok", Some(150)),
+            ("150 ms".into(), "danger".into())
+        );
+        assert_eq!(latency_display("timeout", None).1, "danger");
+        assert_eq!(latency_display("unavailable", None).1, "danger");
+        assert_eq!(latency_display("unknown", None).1, "neutral");
+    }
+
+    #[test]
+    fn targeted_latency_updates_preserve_other_groups_and_missing_entries() {
+        let mut view_model = connected_view_model_with_catalog();
+        let first = view_model
+            .begin_latency_request()
+            .expect("selected group request");
+        view_model
+            .finish_latencies(
+                first.token,
+                Ok(DaemonLatencies {
+                    entries: vec![DaemonLatencyEntry {
+                        group_id: "opaque:selected".into(),
+                        node_id: "opaque:node-b".into(),
+                        latency_ms: Some(79),
+                        status: "ok".into(),
+                    }],
+                }),
+            )
+            .expect("selected group completion");
+        let selected = view_model.catalog_presentation();
+        assert_eq!(selected.nodes[0].latency_text, "79 ms");
+        assert_eq!(selected.nodes[0].latency_tone, "success");
+        assert_eq!(selected.nodes[0].delay_ms, Some(79));
+        assert_eq!(selected.nodes[1].latency_text, "51 ms");
+        assert_eq!(selected.nodes[1].delay_ms, Some(51));
+
+        assert!(view_model.select_catalog_group("opaque:first"));
+        let second = view_model
+            .begin_latency_request()
+            .expect("new group request");
+        assert_eq!(second.group_ids, vec!["opaque:first"]);
+        view_model
+            .finish_latencies(second.token, Ok(DaemonLatencies::default()))
+            .expect("empty targeted completion");
+        assert_eq!(view_model.catalog_presentation().nodes[0].latency_text, "");
+
+        assert!(view_model.select_catalog_group("opaque:selected"));
+        let selected = view_model.catalog_presentation();
+        assert_eq!(selected.nodes[0].latency_text, "79 ms");
+        assert_eq!(selected.nodes[0].delay_ms, Some(79));
+        assert_eq!(selected.nodes[1].latency_text, "51 ms");
+    }
+
+    #[test]
+    fn same_revision_reload_preserves_omitted_latency_and_changed_revision_uses_fresh_data() {
+        let mut view_model = connected_view_model_with_catalog();
+        let request = view_model.begin_latency_request().expect("latency request");
+        view_model
+            .finish_latencies(
+                request.token,
+                Ok(DaemonLatencies {
+                    entries: vec![DaemonLatencyEntry {
+                        group_id: "opaque:selected".into(),
+                        node_id: "opaque:node-b".into(),
+                        latency_ms: Some(42),
+                        status: "ok".into(),
+                    }],
+                }),
+            )
+            .expect("latency completion");
+
+        let same = view_model.begin_catalog_request().expect("same revision");
+        let mut same_fixture = catalog_fixture();
+        same_fixture.groups[1].nodes[0].delay_ms = None;
+        view_model
+            .finish_catalog(same.token, Ok(same_fixture))
+            .expect("same catalog");
+        assert_eq!(
+            view_model.catalog_presentation().nodes[0].latency_text,
+            "42 ms"
+        );
+        assert_eq!(
+            view_model.catalog_presentation().nodes[0].delay_ms,
+            Some(42)
+        );
+
+        let changed = view_model
+            .begin_catalog_request()
+            .expect("changed revision");
+        let mut fixture = catalog_fixture();
+        fixture.revision += 1;
+        view_model
+            .finish_catalog(changed.token, Ok(fixture))
+            .expect("changed catalog");
+        assert_eq!(
+            view_model.catalog_presentation().nodes[0].latency_text,
+            "37 ms"
+        );
+        assert_eq!(
+            view_model.catalog_presentation().nodes[0].delay_ms,
+            Some(37)
+        );
+        assert_eq!(
+            view_model.catalog_presentation().nodes[0].latency_tone,
+            "success"
+        );
+
+        let cleared = view_model
+            .begin_catalog_request()
+            .expect("cleared revision");
+        let mut cleared_fixture = catalog_fixture();
+        cleared_fixture.revision += 2;
+        cleared_fixture.groups[1].nodes[0].delay_ms = None;
+        view_model
+            .finish_catalog(cleared.token, Ok(cleared_fixture))
+            .expect("cleared catalog");
+        assert_eq!(view_model.catalog_presentation().nodes[0].latency_text, "");
+        assert_eq!(view_model.catalog_presentation().nodes[0].delay_ms, None);
+        assert_eq!(
+            view_model.catalog_presentation().nodes[0].latency_tone,
+            "neutral"
         );
     }
 
@@ -1929,6 +2181,8 @@ mod tests {
         let shown = view_model.catalog_presentation();
         assert_eq!(shown.nodes[0].latency_text, "42 ms");
         assert_eq!(shown.nodes[1].latency_text, "таймаут");
+        assert_eq!(shown.nodes[0].delay_ms, Some(42));
+        assert_eq!(shown.nodes[1].delay_ms, None);
 
         let newer = view_model.begin_latency_request().expect("new request");
         assert!(
@@ -2064,12 +2318,121 @@ mod tests {
     fn compact_latency_ui_source_contract() {
         let app = include_str!("../ui/app.slint");
         let main = include_str!("main.rs");
-        assert!(app.contains("callback check-latencies();"));
-        assert!(app.contains("Проверить"));
+        assert!(!app.contains("callback check-latencies();"));
+        assert!(!app.contains("latency-check-enabled"));
+        assert!(app.contains("Задержка обновляется автоматически"));
         assert!(app.contains("trailing-text: node.latency-text;"));
-        assert!(main.contains("ui.on_check_latencies"));
+        assert!(!main.contains("ui.on_check_latencies"));
+        assert!(main.contains("TimerMode::Repeated"));
+        assert!(main.contains("Duration::from_secs(60)"));
+        assert!(main.contains("ui.window().is_visible()"));
+        assert!(main.contains("if current.latency.queued"));
+        assert!(app.contains("trailing-tone: node.latency-tone;"));
+        assert!(app.matches("background: #ffffff05;").count() >= 4);
+        assert!(app.contains("height: 54px;"));
+        assert!(app.contains("border-color: root.status-tone == \"success\""));
+        assert!(include_str!("../ui/components.slint").contains("width: 76px;"));
+        let route_row = include_str!("../ui/components.slint")
+            .split("export component RouteNodeRow")
+            .nth(1)
+            .expect("route row source");
+        assert!(route_row.contains("x: parent.width - self.width - 40px;"));
+        assert!(route_row.contains("parent.width - self.x - trailing-label.width - 48px"));
+        assert!(!route_row.contains("trailing-label.width - (root.selected"));
+        assert!(!route_row.contains("self.width - (root.selected"));
+        assert!(route_row.contains("root.pending ? \"…\" : root.selected ? \"✓\" : \"\""));
+        assert!(!route_row.contains("root.selected ? \"✓\" : \"…\""));
         assert!(main.contains("run_latency_check"));
         assert!(main.contains("if outcome.refresh_catalog"));
+    }
+
+    #[test]
+    fn one_page_home_shell_avoids_routes_blank_and_layout_regressions() {
+        let app = include_str!("../ui/app.slint");
+        let components = include_str!("../ui/components.slint");
+        let main = include_str!("main.rs");
+
+        assert!(app.contains(
+            "root.active-panel == \"routes\" ? \"home\" : root.active-panel == \"events\" ? \"status\" : root.local-page"
+        ));
+        assert!(!app.contains("root.active-panel == \"routes\" ? \"routes\""));
+        assert!(!app.contains("if root.visible-page == \"routes\""));
+        assert!(main.contains("if panel == Panel::Routes"));
+        assert!(main.contains("ui.set_local_page(\"home\".into());"));
+        assert!(main.contains("load_catalog(weak.clone(), open_model.clone());"));
+
+        assert!(!app.contains("Text { text: \"Главная\";"));
+        assert!(!app.contains("profile-name"));
+        assert!(!main.contains("set_profile_name"));
+        assert!(
+            app.contains("height: 60px;\n                                horizontal-stretch: 1;")
+        );
+        assert!(app.contains("if root.has-service-logo: Rectangle"));
+        assert!(app.contains("source: @image-url(\"../assets/power.svg\")"));
+
+        let shelf = app
+            .split("height: 54px;")
+            .nth(1)
+            .and_then(|source| {
+                source
+                    .split("if root.subscription-announcement-text")
+                    .next()
+            })
+            .expect("subscription shelf source");
+        assert!(shelf.contains("border-radius: 16px;"));
+        assert!(shelf.contains("root.subscription-refresh-error != \"\""));
+        assert!(!shelf.contains("if root.subscription-refresh-error != \"\": Text"));
+
+        assert!(!components.contains("#0091ff"));
+        assert!(components.contains("#4c9dff1f"));
+        assert!(components.contains("#4c9dff66"));
+    }
+
+    #[test]
+    fn state_eyebrows_are_sentence_case_and_ready_has_one_route_label() {
+        let states = [
+            UiState::Empty,
+            UiState::Importing,
+            UiState::Ready {
+                profile: "Работа".into(),
+                node: "Авто".into(),
+            },
+            UiState::Connecting {
+                profile: "Работа".into(),
+                node: "Авто".into(),
+                step: "Запуск".into(),
+            },
+            UiState::Connected {
+                profile: "Работа".into(),
+                node: "nl-01".into(),
+            },
+            UiState::Disconnecting {
+                profile: "Работа".into(),
+                node: "nl-01".into(),
+            },
+            UiState::Error {
+                message: "Ошибка".into(),
+            },
+            UiState::DaemonDegraded {
+                message: "Недоступно".into(),
+            },
+        ];
+        for state in states {
+            let eyebrow = state.presentation().eyebrow;
+            assert_ne!(
+                eyebrow,
+                eyebrow.to_uppercase(),
+                "all-caps eyebrow: {eyebrow}"
+            );
+        }
+        let ready = UiState::Ready {
+            profile: "Работа".into(),
+            node: "Авто".into(),
+        }
+        .presentation();
+        assert_eq!(ready.eyebrow, "Готово");
+        assert_eq!(ready.node, "Авто");
+        assert_eq!(ready.supporting, "");
     }
 
     #[test]
@@ -3422,9 +3785,9 @@ mod tests {
             .and_then(|source| source.split("export component RouteNodeRow").next())
             .expect("QuietChip source");
         assert!(quiet_chip.contains("horizontal-stretch: 0;"));
-        assert!(quiet_chip.contains("max-width: 184px;"));
+        assert!(quiet_chip.contains("max-width: 164px;"));
         assert!(quiet_chip.contains("border-radius: 14px;"));
-        assert!(source.contains("min-width: 112px;"));
+        assert!(source.contains("min-width: 104px;"));
         assert!(!source.contains("min-width: 132px;"));
         assert!(source.contains("padding: 20px;"));
         assert!(source.contains("for node in root.catalog-nodes: RouteNodeRow"));
@@ -3433,10 +3796,10 @@ mod tests {
         assert!(!source.contains("height: 238px;"));
 
         for required in [
-            "preferred-width: 820px;",
-            "preferred-height: 760px;",
+            "preferred-width: 840px;",
+            "preferred-height: 720px;",
             "min-width: 700px;",
-            "min-height: 660px;",
+            "min-height: 620px;",
             "no-frame: true;",
             "title-bar := Rectangle",
             "callback window-drag();",
@@ -3458,7 +3821,7 @@ mod tests {
             "label: \"Настройки\";",
             "text: \"Маршруты\";",
             "root.latency-check-queued",
-            "\"Проверим после подключения\"",
+            "\"Проверим автоматически\"",
             "root.open-panel(\"events\")",
             "root.refresh-subscription();",
             "root.primary-action();",

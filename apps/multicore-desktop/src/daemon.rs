@@ -277,7 +277,11 @@ pub trait DaemonClient: Send + Sync {
     fn catalog(&self) -> Result<DaemonCatalog, DaemonError>;
 
     /// POST /v1/latencies. Entries contain only opaque catalog IDs and safe probe outcomes.
-    fn latencies(&self, _revision: Option<u64>) -> Result<DaemonLatencies, DaemonError> {
+    fn latencies(
+        &self,
+        _revision: Option<u64>,
+        _group_ids: &[String],
+    ) -> Result<DaemonLatencies, DaemonError> {
         Err(DaemonError::new("Проверка задержки недоступна."))
     }
 
@@ -323,7 +327,11 @@ impl DaemonClient for UnavailableDaemonClient {
         self.unavailable()
     }
 
-    fn latencies(&self, _revision: Option<u64>) -> Result<DaemonLatencies, DaemonError> {
+    fn latencies(
+        &self,
+        _revision: Option<u64>,
+        _group_ids: &[String],
+    ) -> Result<DaemonLatencies, DaemonError> {
         self.unavailable()
     }
 
@@ -464,8 +472,9 @@ struct SelectionRequest<'a> {
 }
 
 #[derive(Serialize)]
-struct LatencyRequest {
+struct LatencyRequest<'a> {
     revision: Option<u64>,
+    group_ids: &'a [String],
 }
 
 #[derive(Deserialize)]
@@ -529,12 +538,19 @@ impl DaemonClient for HttpDaemonClient {
         )
     }
 
-    fn latencies(&self, revision: Option<u64>) -> Result<DaemonLatencies, DaemonError> {
+    fn latencies(
+        &self,
+        revision: Option<u64>,
+        group_ids: &[String],
+    ) -> Result<DaemonLatencies, DaemonError> {
         let response = self
             .http
             .post(self.endpoint("/v1/latencies"))
             .bearer_auth(&self.token)
-            .json(&LatencyRequest { revision })
+            .json(&LatencyRequest {
+                revision,
+                group_ids,
+            })
             .send()
             .map_err(map_error)?;
         if response.status() == reqwest::StatusCode::CONFLICT {
@@ -708,8 +724,12 @@ pub(crate) mod test_support {
             }
         }
 
-        fn latencies(&self, _revision: Option<u64>) -> Result<DaemonLatencies, DaemonError> {
-            self.record("POST /v1/latencies");
+        fn latencies(
+            &self,
+            _revision: Option<u64>,
+            group_ids: &[String],
+        ) -> Result<DaemonLatencies, DaemonError> {
+            self.record(format!("POST /v1/latencies groups={}", group_ids.join(",")));
             if self.fail_latencies {
                 Err(DaemonError::new("unsafe upstream latency details"))
             } else {
@@ -1048,7 +1068,9 @@ mod http_tests {
         client.disconnect().expect("disconnect request");
         client.events(0, None).expect("events request");
         client.catalog().expect("catalog request");
-        client.latencies(Some(17)).expect("latency request");
+        client
+            .latencies(Some(17), &["opaque:selected".to_owned()])
+            .expect("latency request");
         client.diagnostics().expect("diagnostics request");
 
         let requests = server.join().expect("join test HTTP server");
@@ -1127,16 +1149,19 @@ mod http_tests {
         let client =
             HttpDaemonClient::new(base_url, "latency-token").expect("authenticated client");
 
-        let latencies = client.latencies(Some(17)).expect("latency request");
+        let latencies = client
+            .latencies(Some(17), &["group:auto".to_owned()])
+            .expect("latency request");
 
         let request = server.join().expect("join latency server");
         assert!(request.starts_with("POST /v1/latencies HTTP/1.1\r\n"));
+        assert!(request.contains("\"group_ids\":[\"group:auto\"]"));
         assert!(
             request
                 .to_ascii_lowercase()
                 .contains("authorization: bearer latency-token\r\n")
         );
-        assert!(request.ends_with(r#"{"revision":17}"#));
+        assert!(request.ends_with(r#"{"revision":17,"group_ids":["group:auto"]}"#));
         assert_eq!(
             latencies,
             DaemonLatencies {
@@ -1167,7 +1192,7 @@ mod http_tests {
         let client = HttpDaemonClient::new(base_url, "latency-token").expect("loopback client");
 
         let error = client
-            .latencies(Some(17))
+            .latencies(Some(17), &["group:auto".to_owned()])
             .expect_err("stale latency revision");
 
         let request = server.join().expect("join latency conflict server");

@@ -153,12 +153,12 @@ export component QuietChip inherits Rectangle {
 
     min-width: Theme.interactive-min;
     horizontal-stretch: 0;
-    max-width: 184px;
+    max-width: 164px;
     min-height: Theme.interactive-min;
-    preferred-width: chip-label.preferred-width + Theme.space-4 * 2 + (root.icon == "" ? 0px : 24px);
+    preferred-width: chip-label.preferred-width + Theme.space-3 * 2 + (root.icon == "" ? 0px : 22px);
     preferred-height: Theme.interactive-min;
-    background: root.selected ? #0091ff1f : #ffffff08;
-    border-color: chip-focus.has-focus ? Theme.focus : root.selected ? #0091ff66 : #ffffff12;
+    background: root.selected ? #4c9dff1f : #ffffff08;
+    border-color: chip-focus.has-focus ? Theme.focus : root.selected ? #4c9dff66 : #ffffff12;
     border-width: chip-focus.has-focus ? Theme.focus-width : 1px;
     border-radius: 14px;
     opacity: root.enabled ? 1 : 0.5;
@@ -223,6 +223,7 @@ export component RouteNodeRow inherits Rectangle {
     in property <string> label;
     in property <string> supporting-text;
     in property <string> trailing-text;
+    in property <string> trailing-tone: "neutral";
     in property <string> selected-state-label: "выбрано";
     in property <string> pending-state-label: "выбор применяется";
     in property <string> state-label:
@@ -241,8 +242,8 @@ export component RouteNodeRow inherits Rectangle {
     min-height: Theme.interactive-min;
     preferred-height: 46px;
     max-height: 46px;
-    background: root.selected ? #0091ff17 : #ffffff06;
-    border-color: row-focus.has-focus ? Theme.focus : root.selected ? #0091ff59 : #ffffff12;
+    background: root.selected ? #4c9dff17 : #ffffff06;
+    border-color: row-focus.has-focus ? Theme.focus : root.selected ? #4c9dff59 : #ffffff12;
     border-width: row-focus.has-focus ? Theme.focus-width : 1px;
     border-radius: 14px;
     accessible-role: button;
@@ -260,8 +261,8 @@ export component RouteNodeRow inherits Rectangle {
         width: 32px;
         height: 32px;
         border-radius: 6px;
-        background: root.selected ? #0091ff1f : #ffffff0a;
-        border-color: root.selected ? #0091ff42 : #ffffff0f;
+        background: root.selected ? #4c9dff1f : #ffffff0a;
+        border-color: root.selected ? #4c9dff42 : #ffffff0f;
         border-width: 1px;
 
         Text {
@@ -278,7 +279,7 @@ export component RouteNodeRow inherits Rectangle {
     Text {
         x: 52px;
         y: root.supporting-text == "" ? 0 : 2px;
-        width: parent.width - self.x - trailing-label.preferred-width - (root.selected ? 40px : Theme.space-6);
+        width: parent.width - self.x - trailing-label.width - 48px;
         height: root.supporting-text == "" ? parent.height : 24px;
         text: root.label;
         color: Theme.text-primary;
@@ -293,7 +294,7 @@ export component RouteNodeRow inherits Rectangle {
     if root.supporting-text != "": Text {
         x: 52px;
         y: 23px;
-        width: parent.width - self.x - trailing-label.preferred-width - (root.selected ? 40px : Theme.space-6);
+        width: parent.width - self.x - trailing-label.width - 48px;
         text: root.supporting-text;
         color: Theme.text-muted;
         font-family: Theme.font-family;
@@ -304,13 +305,19 @@ export component RouteNodeRow inherits Rectangle {
     }
 
     trailing-label := Text {
-        x: parent.width - self.width - (root.selected ? 40px : Theme.space-4);
+        x: parent.width - self.width - 40px;
+        width: 76px;
         height: parent.height;
         text: root.trailing-text;
-        color: root.selected ? Theme.accent-blue-hover : Theme.text-secondary;
+        color: root.trailing-tone == "success"
+            ? Theme.accent-green
+            : root.trailing-tone == "warning"
+                ? Theme.warning
+                : root.trailing-tone == "danger" ? Theme.error : Theme.text-muted;
         font-family: Theme.font-family;
         font-size: Theme.type-metadata-size;
         font-weight: Theme.weight-regular;
+        horizontal-alignment: right;
         vertical-alignment: center;
         accessible-role: none;
     }
@@ -319,7 +326,7 @@ export component RouteNodeRow inherits Rectangle {
         x: parent.width - 34px;
         width: 20px;
         height: parent.height;
-        text: root.selected ? "✓" : "…";
+        text: root.pending ? "…" : root.selected ? "✓" : "";
         color: root.pending ? Theme.warning : Theme.accent-blue-hover;
         font-family: Theme.font-family;
         font-size: Theme.type-label-size;

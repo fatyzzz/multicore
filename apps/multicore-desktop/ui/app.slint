@@ -23,6 +23,7 @@ export struct UiCatalogNode {
     label: string,
     selected: bool,
     latency-text: string,
+    latency-tone: string,
 }
 
 export struct UiProxyMapping {
@@ -327,10 +328,10 @@ export component AppWindow inherits Window {
     title: "MultiCore";
     icon: @image-url("../assets/app-icon.svg");
     no-frame: true;
-    preferred-width: 820px;
-    preferred-height: 760px;
+    preferred-width: 840px;
+    preferred-height: 720px;
     min-width: 700px;
-    min-height: 660px;
+    min-height: 620px;
     max-width: 1120px;
     max-height: 1000px;
     background: Theme.canvas;
@@ -339,7 +340,6 @@ export component AppWindow inherits Window {
     in property <string> status-eyebrow: "Профиль не добавлен";
     in property <string> headline: "Добавьте подписку";
     in property <string> supporting: "Вставьте URL — остальное настроим автоматически.";
-    in property <string> profile-name: "Нет профиля";
     in property <string> node-name: "Авто";
     in property <bool> has-profile: false;
     in property <bool> state-busy: false;
@@ -370,7 +370,6 @@ export component AppWindow inherits Window {
     in property <bool> catalog-selection-pending: false;
     in property <bool> catalog-selection-queued: false;
     in property <string> catalog-error;
-    in property <bool> latency-check-enabled: false;
     in property <bool> latency-check-loading: false;
     in property <bool> latency-check-queued: false;
     in property <string> latency-check-error;
@@ -396,7 +395,7 @@ export component AppWindow inherits Window {
     in property <bool> update-busy: false;
 
     in-out property <string> local-page: "home";
-    private property <string> visible-page: root.active-panel == "routes" ? "routes" : root.active-panel == "events" ? "status" : root.local-page;
+    private property <string> visible-page: root.active-panel == "routes" ? "home" : root.active-panel == "events" ? "status" : root.local-page;
     private property <bool> catalog-group-navigation-enabled: !root.catalog-loading && root.catalog-groups.length > 0;
     in-out property <string> subscription-draft;
 
@@ -409,7 +408,6 @@ export component AppWindow inherits Window {
     callback filter-events(string);
     callback select-catalog-group(string);
     callback select-catalog-node(string);
-    callback check-latencies();
     callback set-launch-at-sign-in(bool);
     callback window-drag();
     callback window-minimize();
@@ -517,22 +515,23 @@ export component AppWindow inherits Window {
         main-pane := Rectangle {
             background: Theme.canvas;
 
+            // Local signal grid: structural guides, intentionally almost invisible.
+            Rectangle { x: parent.width / 3; width: 1px; height: parent.height; background: #ffffff05; }
+            Rectangle { x: parent.width * 2 / 3; width: 1px; height: parent.height; background: #ffffff05; }
+            Rectangle { y: parent.height / 3; width: parent.width; height: 1px; background: #ffffff05; }
+            Rectangle { y: parent.height * 2 / 3; width: parent.width; height: 1px; background: #ffffff05; }
+
             if root.visible-page == "home": Rectangle {
                 background: transparent;
                 VerticalLayout {
                     padding: 20px;
                     spacing: 10px;
 
-                    HorizontalLayout {
-                        height: 32px;
-                        Text { text: "Главная"; color: Theme.text-primary; font-size: 20px; font-weight: Theme.weight-semibold; vertical-alignment: center; }
-                        Rectangle { horizontal-stretch: 1; background: transparent; }
-                        Text { text: root.profile-name; color: Theme.text-muted; font-size: Theme.type-metadata-size; vertical-alignment: center; overflow: elide; }
-                    }
-
                     connection-strip := Rectangle {
                         height: 96px;
-                        background: Theme.surface;
+                        background: root.status-tone == "success" ? #3ccb7f0b : root.status-tone == "danger" ? #f06a6a0a : #4c9dff09;
+                        border-color: root.status-tone == "success" ? #3ccb7f66 : root.status-tone == "danger" ? #f06a6a66 : #4c9dff55;
+                        border-width: 1px;
                         border-radius: 18px;
                         HorizontalLayout {
                             padding-left: 14px;
@@ -584,6 +583,27 @@ export component AppWindow inherits Window {
                                         image-fit: contain;
                                         accessible-role: none;
                                     }
+                                    if root.has-service-logo: Rectangle {
+                                        x: parent.width - 26px;
+                                        y: parent.height - 26px;
+                                        width: 22px;
+                                        height: 22px;
+                                        border-radius: 11px;
+                                        background: #0d0f12e8;
+                                        border-color: #ffffff33;
+                                        border-width: 1px;
+                                        accessible-role: none;
+
+                                        Image {
+                                            x: 5px;
+                                            y: 5px;
+                                            width: 12px;
+                                            height: 12px;
+                                            source: @image-url("../assets/power.svg");
+                                            image-fit: contain;
+                                            accessible-role: none;
+                                        }
+                                    }
                                     if !root.has-service-logo: Image {
                                         x: (parent.width - 28px) / 2;
                                         y: (parent.height - 28px) / 2 - 1px;
@@ -620,20 +640,24 @@ export component AppWindow inherits Window {
                     }
 
                     Rectangle {
-                        height: 60px;
+                        height: 54px;
                         background: Theme.surface;
-                        border-radius: 12px;
+                        border-radius: 16px;
                         HorizontalLayout {
                             padding-left: 16px;
                             padding-right: 12px;
-                            padding-top: 12px;
-                            padding-bottom: 8px;
+                            padding-top: 8px;
+                            padding-bottom: 7px;
                             spacing: 12px;
                             VerticalLayout {
-                                spacing: 4px;
+                                spacing: 2px;
                                 Text { text: root.subscription-title; color: Theme.text-primary; font-size: Theme.type-label-size; font-weight: Theme.weight-semibold; overflow: elide; }
-                                Text { text: root.subscription-usage + " · " + root.subscription-expiry; color: Theme.text-muted; font-size: Theme.type-metadata-size; overflow: elide; }
-                                if root.subscription-refresh-error != "": Text { text: root.subscription-refresh-error; color: Theme.error; font-size: Theme.type-metadata-size; overflow: elide; }
+                                Text {
+                                    text: root.subscription-refresh-error != "" ? root.subscription-refresh-error : root.subscription-usage + " · " + root.subscription-expiry;
+                                    color: root.subscription-refresh-error != "" ? Theme.error : Theme.text-muted;
+                                    font-size: Theme.type-metadata-size;
+                                    overflow: elide;
+                                }
                             }
                             SmallAction { label: root.subscription-refresh-pending ? "Обновляем…" : "Обновить"; enabled: root.subscription-refresh-enabled && !root.subscription-refresh-pending; activated => { root.refresh-subscription(); } }
                         }
@@ -690,20 +714,33 @@ export component AppWindow inherits Window {
                         VerticalLayout {
                             spacing: 8px;
                             HorizontalLayout {
-                                height: 44px;
+                                height: 36px;
                                 spacing: 12px;
                                 Text { text: "Маршруты"; color: Theme.text-primary; font-size: Theme.type-label-size; font-weight: Theme.weight-semibold; vertical-alignment: center; }
                                 Rectangle { horizontal-stretch: 1; background: transparent; }
-                                if root.catalog-selection-queued || root.catalog-selection-pending || root.latency-check-queued: Text { text: root.catalog-selection-queued ? "После подключения" : root.catalog-selection-pending ? "Применяем…" : "Проверим после подключения"; color: Theme.warning; font-size: Theme.type-metadata-size; vertical-alignment: center; overflow: elide; }
-                                SmallAction { label: root.latency-check-loading ? "Проверяем…" : root.latency-check-queued ? "Ожидает" : "Проверить"; enabled: root.latency-check-enabled; activated => { root.check-latencies(); } }
+                                Text {
+                                    text: root.catalog-selection-queued
+                                        ? "Применим после подключения"
+                                        : root.catalog-selection-pending
+                                            ? "Применяем маршрут…"
+                                            : root.latency-check-loading
+                                                ? "Проверяем задержку…"
+                                                : root.latency-check-queued
+                                                    ? "Проверим автоматически"
+                                                    : "Задержка обновляется автоматически";
+                                    color: root.catalog-selection-queued || root.catalog-selection-pending ? Theme.warning : Theme.text-muted;
+                                    font-size: Theme.type-metadata-size;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
                             }
                             ScrollView {
-                                height: 48px;
+                                height: 60px;
                                 horizontal-stretch: 1;
                                 HorizontalLayout {
                                     spacing: 8px;
                                     for group in root.catalog-groups: QuietChip {
-                                        min-width: 112px;
+                                        min-width: 104px;
                                         height: 44px;
                                         icon: group.icon;
                                         label: group.label;
@@ -724,6 +761,7 @@ export component AppWindow inherits Window {
                                         label: node.label;
                                         supporting-text: "";
                                         trailing-text: node.latency-text;
+                                        trailing-tone: node.latency-tone;
                                         selected: node.selected;
                                         pending: root.catalog-selection-pending && node.selected;
                                         enabled: root.catalog-selection-enabled;

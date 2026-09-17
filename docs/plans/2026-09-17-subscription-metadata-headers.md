@@ -110,10 +110,10 @@
 
 **Does NOT cover:** true multi-sub storage/switching or starting TUN during verification.
 
-- [ ] **Step 1: Write failing tests** requiring no manual latency button, selected-group targeted requests, single-flight rerun coalescing, automatic load/group-switch/visible 60-second triggers, and 79/80/149/150 ms tone boundaries.
-- [ ] **Step 2: Verify RED** with the focused desktop unit tests.
-- [ ] **Step 3: Implement automatic targeted latency** using the daemon's existing `group_ids` support and retain last-known values for inactive groups.
-- [ ] **Step 4: Implement the native Signal Grid shell** with restrained state glow, local mesh layers, stable tabular latency column, compact subscription shelf, and one-page route hierarchy.
+- [x] **Step 1: Write failing tests** requiring no manual latency button, selected-group targeted requests, single-flight rerun coalescing, automatic load/group-switch/visible 60-second triggers, and 79/80/149/150 ms tone boundaries.
+- [x] **Step 2: Verify RED** with the focused desktop unit tests.
+- [x] **Step 3: Implement automatic targeted latency** using the daemon's existing `group_ids` support and retain last-known values for inactive groups.
+- [x] **Step 4: Implement the native Signal Grid shell** with restrained state glow, local mesh layers, stable tabular latency column, compact subscription shelf, and one-page route hierarchy.
 - [ ] **Step 5: Read Impeccable `craft-floor.md` immediately before the UI edits, then run the bounded native screenshot/review workflow without starting TUN.**
 
 ### Task 6: Final verification
