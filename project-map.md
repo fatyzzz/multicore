@@ -1,5 +1,5 @@
 # Project Map
-_Updated: 2026-09-17 | Git: 4753ab1_
+_Updated: 2026-09-17 | Git: e144f91_
 
 ## Directory Structure
 packaging/windows-x64/ — pinned upstream-core manifest, license texts, notices, and portable-package README.
@@ -57,6 +57,7 @@ crates/multicore-core/src/network.rs — native Windows default-route/interface 
 - Ready-state route choices are stored per group; connected selections are confirmed against Mihomo's live controller state and existing controller connections are closed after a confirmed change.
 - Diagnostics mapping is derived only from bounded literal-loopback `socks5` entries in Mihomo YAML; Xray JSON remains opaque and byte-exact.
 - Route flags and semantic emoji use the embedded `Twemoji.Mozilla.ttf`; Slint release builds must use `EmbedResourcesKind::EmbedFiles` so the portable client has no external font dependency.
+- Absolute visual overlays nested inside Slint controls must set explicit `x`, `y`, `width`, and `height`; implicit geometry can compile but render as zero-size.
 - Deterministic selection capture sends client-coordinate mouse messages directly to the exact desktop HWND; global cursor injection is forbidden because it is focus-racy across sequential scenarios.
 - Daemon catalog labels preserve bounded common emoji/flag ranges but still genericize URL, credential, UUID, control, and unsafe arbitrary-punctuation names; the desktop derives display-only icon tiles without changing opaque selection IDs.
 - Desktop control traffic is literal-loopback HTTP only, with proxy/redirect disabled and bounded decoded bodies.
