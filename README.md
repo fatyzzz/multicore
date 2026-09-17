@@ -44,6 +44,9 @@ dist\multicore-windows-x64\MultiCore.exe
 
 Контракт для backend: [docs/contracts/multicore-subscription-backend-prompt.md](docs/contracts/multicore-subscription-backend-prompt.md).
 
+Полный HTTP-контракт User-Agent, identity- и metadata-заголовков:
+[docs/subscription-http-contract.md](docs/subscription-http-contract.md).
+
 ## Сборка из исходников
 
 Нужны Rust/Cargo ровно 1.98.1 и MSVC Build Tools:

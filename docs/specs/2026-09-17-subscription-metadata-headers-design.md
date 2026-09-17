@@ -97,9 +97,9 @@ diagnostic serialization.
   present. It uses a semantic icon and tone, not arbitrary provider styling.
 - Support and website actions appear only when the corresponding validated target is
   available.
-- A validated cached service logo replaces the static glyph inside the primary
-  connection control. Missing, invalid or failed logos use the built-in MultiCore
-  mark without changing layout.
+- The built-in power glyph remains the primary connection affordance. A validated
+  cached service logo appears as a bounded lower-right identity badge; a missing,
+  invalid, or failed logo removes only the badge without changing layout.
 - Refresh replaces metadata atomically together with the config snapshot. A failed
   refresh preserves the entire last-good config and metadata.
 
