@@ -3737,11 +3737,8 @@ mod tests {
             "in property <bool> reduced-motion",
             "wave-timer := Timer",
             "running: root.ambient-background-enabled && root.shell-active && !root.reduced-motion",
+            "private property <bool> ambient-motion-active: root.ambient-background-enabled && root.shell-active && !root.reduced-motion && !root.minimized && root.visible-page == \"home\"",
             "interval: 12s",
-            "opacity: 0.02",
-            "opacity: 0.03",
-            "duration: 12s",
-            "duration: 18s",
         ] {
             assert!(
                 source.contains(required),
@@ -3765,6 +3762,40 @@ mod tests {
         assert!(source[first_wave.saturating_sub(80)..first_wave].contains("clip: true"));
         assert!(!wave_layer.contains("TouchArea"));
         assert!(!wave_layer.contains("blur"));
+
+        let wave_a = source
+            .split("ambient-wave-a := Path {")
+            .nth(1)
+            .and_then(|source| source.split("ambient-wave-b := Path {").next())
+            .expect("wave A block");
+        for required in [
+            "x: root.ambient-motion-active && root.ambient-wave-phase ? -30px : -38px;",
+            "y: root.ambient-motion-active && root.ambient-wave-phase ? 74px : 68px;",
+            "opacity: 0.02;",
+            "animate x { duration: root.ambient-motion-active ? 12s : 0ms;",
+            "animate y { duration: root.ambient-motion-active ? 12s : 0ms;",
+        ] {
+            assert!(wave_a.contains(required), "wave A missing: {required}");
+        }
+        let wave_a_delta = (8_i32, 6_i32);
+        assert!(wave_a_delta.0.pow(2) + wave_a_delta.1.pow(2) <= 10_i32.pow(2));
+
+        let wave_b = source
+            .split("ambient-wave-b := Path {")
+            .nth(1)
+            .and_then(|source| source.split("VerticalLayout {").next())
+            .expect("wave B block");
+        for required in [
+            "x: root.ambient-motion-active && root.ambient-wave-phase ? -46px : -38px;",
+            "y: root.ambient-motion-active && root.ambient-wave-phase ? 266px : 272px;",
+            "opacity: 0.03;",
+            "animate x { duration: root.ambient-motion-active ? 18s : 0ms;",
+            "animate y { duration: root.ambient-motion-active ? 18s : 0ms;",
+        ] {
+            assert!(wave_b.contains(required), "wave B missing: {required}");
+        }
+        let wave_b_delta = (8_i32, 6_i32);
+        assert!(wave_b_delta.0.pow(2) + wave_b_delta.1.pow(2) <= 10_i32.pow(2));
     }
 
     #[test]

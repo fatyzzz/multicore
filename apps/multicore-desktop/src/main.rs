@@ -149,6 +149,21 @@ fn reduced_motion_from_client_area_animation(enabled: Option<bool>) -> bool {
     matches!(enabled, Some(false))
 }
 
+#[cfg(test)]
+fn ambient_motion_allowed(
+    user_enabled: bool,
+    shell_active: bool,
+    reduced_motion: bool,
+    minimized: bool,
+    home_visible: bool,
+) -> bool {
+    user_enabled && shell_active && !reduced_motion && !minimized && home_visible
+}
+
+fn shell_active_after_native_minimize_change(minimized: bool) -> bool {
+    !minimized
+}
+
 #[cfg(windows)]
 fn client_area_animation_enabled() -> Option<bool> {
     const SPI_GETCLIENTAREAANIMATION: u32 = 0x1042;
@@ -986,7 +1001,7 @@ fn wire_window_controls(ui: &AppWindow, tray_available: bool) {
         }
         MinimizeDisposition::MinimizeToTaskbar => {
             if let Some(ui) = weak.upgrade() {
-                ui.set_shell_active(false);
+                ui.set_shell_active(shell_active_after_native_minimize_change(true));
                 ui.window().set_minimized(true);
             }
         }
@@ -1851,10 +1866,11 @@ mod window_tests {
     use super::{
         LaunchArguments, LaunchMode, PREFERENCE_RETRY_DELAYS, PREFERENCE_SAVE_ERROR_RU,
         PersistenceTracker, PreferenceWriter, WindowObservation, WriterCommand, WriterResult,
-        activation_for_launch_arguments, drain_latest_write, initial_window_visible,
-        next_maximized, parse_launch_arguments, preference_error_for_result,
-        reduced_motion_from_client_area_animation, retry_delay_after_failure,
-        runtime_allows_update, scale_factor_milli, visible_page_from_name, visible_page_name,
+        activation_for_launch_arguments, ambient_motion_allowed, drain_latest_write,
+        initial_window_visible, next_maximized, parse_launch_arguments,
+        preference_error_for_result, reduced_motion_from_client_area_animation,
+        retry_delay_after_failure, runtime_allows_update, scale_factor_milli,
+        shell_active_after_native_minimize_change, visible_page_from_name, visible_page_name,
     };
     use crate::preferences::{AppPreferences, PreferenceStore, VisiblePage, WindowBounds};
     use crate::single_instance::Activation;
@@ -1880,6 +1896,31 @@ mod window_tests {
         assert!(source.contains("SPI_GETCLIENTAREAANIMATION"));
         assert!(source.contains("client_area_animation_enabled()"));
         assert!(source.contains("ui.set_reduced_motion("));
+    }
+
+    #[test]
+    fn ambient_motion_gate_stops_on_every_inactive_path() {
+        assert!(ambient_motion_allowed(true, true, false, false, true));
+        assert!(!ambient_motion_allowed(false, true, false, false, true));
+        assert!(!ambient_motion_allowed(true, false, false, false, true));
+        assert!(!ambient_motion_allowed(true, true, true, false, true));
+        assert!(!ambient_motion_allowed(true, true, false, true, true));
+        assert!(!ambient_motion_allowed(true, true, false, false, false));
+    }
+
+    #[test]
+    fn native_minimize_and_restore_drive_shell_activity_without_tray_wakeup() {
+        assert!(!shell_active_after_native_minimize_change(true));
+        assert!(shell_active_after_native_minimize_change(false));
+
+        let source = include_str!("../ui/app.slint");
+        let handler = source
+            .split("changed minimized => {")
+            .nth(1)
+            .and_then(|source| source.split('}').next())
+            .expect("native minimized change handler");
+        assert!(handler.contains("root.shell-active = !root.minimized;"));
+        assert!(!handler.contains("if (!root.minimized)"));
     }
 
     #[test]

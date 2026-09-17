@@ -389,7 +389,7 @@ export component AppWindow inherits Window {
     in-out property <bool> shell-active: true;
     in property <bool> reduced-motion: false;
     private property <bool> ambient-wave-phase: false;
-    private property <bool> ambient-motion-active: root.ambient-background-enabled && root.shell-active && !root.reduced-motion && root.visible-page == "home";
+    private property <bool> ambient-motion-active: root.ambient-background-enabled && root.shell-active && !root.reduced-motion && !root.minimized && root.visible-page == "home";
     in-out property <bool> replace-editor-open: false;
     in-out property <int> import-success-serial: 0;
     in property <bool> update-available: false;
@@ -546,8 +546,8 @@ export component AppWindow inherits Window {
                     commands: "M 0 124 C 160 40 340 36 500 112 C 668 192 824 184 1000 82 L 1000 220 L 0 220 Z";
                     fill: #c8cdd5;
                     opacity: 0.02;
-                    animate x { duration: 12s; easing: ease-in-out; }
-                    animate y { duration: 12s; easing: ease-in-out; }
+                    animate x { duration: root.ambient-motion-active ? 12s : 0ms; easing: ease-in-out; }
+                    animate y { duration: root.ambient-motion-active ? 12s : 0ms; easing: ease-in-out; }
                 }
 
                 ambient-wave-b := Path {
@@ -561,8 +561,8 @@ export component AppWindow inherits Window {
                     commands: "M 0 74 C 190 174 350 184 510 92 C 670 0 824 34 1000 142 L 1000 240 L 0 240 Z";
                     fill: #aeb5bf;
                     opacity: 0.03;
-                    animate x { duration: 18s; easing: ease-in-out; }
-                    animate y { duration: 18s; easing: ease-in-out; }
+                    animate x { duration: root.ambient-motion-active ? 18s : 0ms; easing: ease-in-out; }
+                    animate y { duration: root.ambient-motion-active ? 18s : 0ms; easing: ease-in-out; }
                 }
 
                 VerticalLayout {
@@ -1039,9 +1039,7 @@ export component AppWindow inherits Window {
     // A taskbar restore has no application callback; the native minimized property
     // supplies the matching resume edge without waking a tray-hidden window.
     changed minimized => {
-        if (!root.minimized) {
-            root.shell-active = true;
-        }
+        root.shell-active = !root.minimized;
     }
 
     TouchArea {
