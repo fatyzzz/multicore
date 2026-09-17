@@ -11,8 +11,10 @@ mod view_model;
 mod windows_settings;
 mod windows_shell;
 
+use std::cell::Cell;
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -33,8 +35,9 @@ use view_model::{
 };
 use windows_settings::LaunchAtSignInState;
 use windows_shell::{
-    CloseDisposition, MinimizeDisposition, MonitorRect, close_disposition, minimize_disposition,
-    next_maximized, parse_resize_edge, restore_bounds,
+    CloseDisposition, MinimizeDisposition, MonitorRect, MonitorSignature, close_disposition,
+    minimize_disposition, monitor_cap_changed, next_maximized, parse_resize_edge,
+    restore_placement,
 };
 
 slint::include_modules!();
@@ -61,6 +64,7 @@ struct WindowObservation {
 struct PersistenceTracker {
     persisted: AppPreferences,
     candidate: Option<WindowObservation>,
+    queued: Option<AppPreferences>,
 }
 
 impl PersistenceTracker {
@@ -68,6 +72,7 @@ impl PersistenceTracker {
         Self {
             persisted,
             candidate: None,
+            queued: None,
         }
     }
 
@@ -93,12 +98,23 @@ impl PersistenceTracker {
         };
         let stable = self.candidate.as_ref() == Some(&observation);
         self.candidate = Some(observation.clone());
-        stable
+        let next = stable
             .then(|| self.changed_preferences_for(&observation))
-            .flatten()
+            .flatten();
+        if next
+            .as_ref()
+            .is_some_and(|next| self.queued.as_ref() == Some(next))
+        {
+            return None;
+        }
+        self.queued = next.clone();
+        next
     }
 
     fn mark_persisted(&mut self, preferences: AppPreferences) {
+        if self.queued.as_ref() == Some(&preferences) {
+            self.queued = None;
+        }
         self.persisted = preferences;
     }
 }
@@ -117,6 +133,129 @@ fn visible_page_from_name(page: &str) -> Option<VisiblePage> {
         "status" => Some(VisiblePage::Status),
         "settings" => Some(VisiblePage::Settings),
         _ => None,
+    }
+}
+
+const PREFERENCE_SAVE_ERROR_RU: &str = "Не удалось сохранить настройки.";
+const PREFERENCE_RETRY_DELAYS: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(2)];
+
+fn retry_delay_after_failure(attempt: usize) -> Option<Duration> {
+    attempt
+        .checked_sub(1)
+        .and_then(|index| PREFERENCE_RETRY_DELAYS.get(index).copied())
+}
+
+enum WriterCommand {
+    Write(AppPreferences),
+    Stop,
+}
+
+enum WriterResult {
+    Saved(AppPreferences),
+    Failed,
+}
+
+struct PreferenceWriter {
+    command_tx: Sender<WriterCommand>,
+    result_rx: Receiver<WriterResult>,
+    handle: Option<thread::JoinHandle<()>>,
+    store: Option<PreferenceStore>,
+}
+
+impl PreferenceWriter {
+    fn start(store: Option<PreferenceStore>) -> Self {
+        let (command_tx, command_rx) = mpsc::channel();
+        let (result_tx, result_rx) = mpsc::channel();
+        let worker_store = store.clone();
+        let handle =
+            thread::spawn(move || preference_writer_loop(worker_store, command_rx, result_tx));
+        Self {
+            command_tx,
+            result_rx,
+            handle: Some(handle),
+            store,
+        }
+    }
+
+    fn enqueue(&self, preferences: AppPreferences) {
+        let _ = self.command_tx.send(WriterCommand::Write(preferences));
+    }
+
+    fn poll(&self) -> Vec<WriterResult> {
+        self.result_rx.try_iter().collect()
+    }
+
+    fn stop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            let _ = self.command_tx.send(WriterCommand::Stop);
+            let _ = handle.join();
+        }
+    }
+
+    fn stop_and_flush(&mut self, preferences: &AppPreferences) -> bool {
+        self.stop();
+        self.store
+            .as_ref()
+            .is_some_and(|store| store.save(preferences).is_ok())
+    }
+}
+
+impl Drop for PreferenceWriter {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+fn preference_writer_loop(
+    store: Option<PreferenceStore>,
+    commands: Receiver<WriterCommand>,
+    results: Sender<WriterResult>,
+) {
+    while let Ok(command) = commands.recv() {
+        let WriterCommand::Write(mut preferences) = command else {
+            break;
+        };
+        let mut stop_after_write = drain_latest_write(&commands, &mut preferences);
+        let mut attempt = 0_usize;
+        loop {
+            attempt += 1;
+            let saved = store
+                .as_ref()
+                .is_some_and(|store| store.save(&preferences).is_ok());
+            if saved {
+                let _ = results.send(WriterResult::Saved(preferences));
+                if stop_after_write {
+                    return;
+                }
+                break;
+            }
+            let _ = results.send(WriterResult::Failed);
+            if stop_after_write {
+                return;
+            }
+            let Some(retry_delay) = retry_delay_after_failure(attempt) else {
+                break;
+            };
+            match commands.recv_timeout(retry_delay) {
+                Ok(WriterCommand::Write(replacement)) => {
+                    preferences = replacement;
+                    attempt = 0;
+                    stop_after_write = drain_latest_write(&commands, &mut preferences);
+                }
+                Ok(WriterCommand::Stop) | Err(RecvTimeoutError::Disconnected) => return,
+                Err(RecvTimeoutError::Timeout) => {}
+            }
+        }
+    }
+}
+
+fn drain_latest_write(commands: &Receiver<WriterCommand>, latest: &mut AppPreferences) -> bool {
+    loop {
+        match commands.try_recv() {
+            Ok(WriterCommand::Write(replacement)) => *latest = replacement,
+            Ok(WriterCommand::Stop) | Err(TryRecvError::Disconnected) => return true,
+            Err(TryRecvError::Empty) => return false,
+        }
     }
 }
 
@@ -153,12 +292,20 @@ fn main() -> Result<(), slint::PlatformError> {
     let preference_tracker = Arc::new(Mutex::new(PersistenceTracker::new(
         loaded_preferences.clone(),
     )));
-    let preference_store = Arc::new(preference_store);
+    let preference_writer = Arc::new(Mutex::new(PreferenceWriter::start(preference_store)));
 
     let model = Arc::new(Mutex::new(DesktopViewModel::new(client)));
     let update_state = Arc::new(Mutex::new(UpdateState::initial()));
 
     let ui = AppWindow::new()?;
+    if preference_writer
+        .lock()
+        .expect("preference writer lock")
+        .store
+        .is_none()
+    {
+        ui.set_preference_error(PREFERENCE_SAVE_ERROR_RU.into());
+    }
     apply_snapshot(&ui, &snapshot(&model.lock().expect("view model lock")));
     ui.set_local_page(visible_page_name(&loaded_preferences.visible_page).into());
     if let Some(subscription_url) = launch_arguments.subscription_url {
@@ -187,7 +334,7 @@ fn main() -> Result<(), slint::PlatformError> {
     let tray_model_source = model.clone();
     let tray_action_ui = ui.as_weak();
     let tray_action_model = model.clone();
-    let tray_preference_store = preference_store.clone();
+    let tray_preference_writer = preference_writer.clone();
     let tray_preference_tracker = preference_tracker.clone();
     let tray_runtime = tray::start(
         tray_model,
@@ -197,7 +344,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 &tray_action_ui,
                 &tray_action_model,
                 command,
-                &tray_preference_store,
+                &tray_preference_writer,
                 &tray_preference_tracker,
             )
         },
@@ -206,7 +353,7 @@ fn main() -> Result<(), slint::PlatformError> {
     .ok();
     wire_window_controls(&ui, tray_runtime.is_some());
     let _preference_timer =
-        wire_preference_persistence(&ui, preference_store.clone(), preference_tracker.clone());
+        wire_preference_persistence(&ui, preference_writer.clone(), preference_tracker.clone());
     wire_updater(&ui, model.clone(), update_state.clone());
     if updater::configured_repository().ok().flatten().is_some() {
         run_update_check(ui.as_weak(), model.clone(), update_state);
@@ -216,6 +363,10 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.show()?;
     }
     let result = slint::run_event_loop();
+    preference_writer
+        .lock()
+        .expect("preference writer lock")
+        .stop();
     let _ = ui.hide();
     drop(tray_runtime);
     result
@@ -481,43 +632,85 @@ fn monitor_rects(window: &slint::winit_030::winit::window::Window) -> Vec<Monito
         .available_monitors()
         .filter_map(|monitor| {
             let scale = monitor.scale_factor();
+            let scale_milli = scale_factor_milli(scale)?;
             let (position, size) = monitor_work_area(&monitor)?;
-            let position = position.to_logical::<i32>(scale);
-            let size = size.to_logical::<u32>(scale);
             Some(MonitorRect {
                 x: position.x,
                 y: position.y,
                 width: size.width,
                 height: size.height,
+                scale_milli,
                 primary: primary.as_ref() == Some(&monitor),
             })
         })
         .collect()
 }
 
-fn set_current_monitor_max_size(window: &slint::winit_030::winit::window::Window) {
+fn scale_factor_milli(scale: f64) -> Option<u32> {
+    if !scale.is_finite() || !(0.5..=8.0).contains(&scale) {
+        return None;
+    }
+    Some((scale * 1_000.0).round() as u32)
+}
+
+fn current_monitor_signature(
+    window: &slint::winit_030::winit::window::Window,
+) -> Option<MonitorSignature> {
+    let monitor = window.current_monitor()?;
+    let (position, size) = monitor_work_area(&monitor)?;
+    Some(MonitorSignature {
+        x: position.x,
+        y: position.y,
+        width: size.width,
+        height: size.height,
+        scale_milli: scale_factor_milli(monitor.scale_factor())?,
+    })
+}
+
+fn set_current_monitor_max_size(
+    window: &slint::winit_030::winit::window::Window,
+) -> Option<MonitorSignature> {
     use slint::winit_030::winit::dpi::LogicalSize;
 
-    let maximum = window.current_monitor().and_then(|monitor| {
-        let (_, size) = monitor_work_area(&monitor)?;
-        let size = size.to_logical::<u32>(monitor.scale_factor());
-        Some(LogicalSize::new(size.width, size.height))
+    let signature = current_monitor_signature(window);
+    let maximum = signature.map(|signature| {
+        let width = u64::from(signature.width) * 1_000 / u64::from(signature.scale_milli);
+        let height = u64::from(signature.height) * 1_000 / u64::from(signature.scale_milli);
+        LogicalSize::new(
+            width.min(u64::from(u32::MAX)) as u32,
+            height.min(u64::from(u32::MAX)) as u32,
+        )
     });
     window.set_max_inner_size(maximum);
+    signature
 }
 
 fn apply_saved_placement(ui: &AppWindow, preferences: &AppPreferences) {
-    use slint::winit_030::winit::dpi::{LogicalPosition, LogicalSize};
+    use slint::winit_030::winit::dpi::{LogicalSize, PhysicalPosition};
 
     let saved = preferences.restored_bounds.clone();
     let maximized = preferences.maximized;
     let _ = ui.window().with_winit_window(|window| {
         let monitors = monitor_rects(window);
-        if let Some(bounds) = saved.and_then(|saved| restore_bounds(saved, &monitors)) {
-            let _ = window.request_inner_size(LogicalSize::new(bounds.width, bounds.height));
-            window.set_outer_position(LogicalPosition::new(bounds.x, bounds.y));
+        let mut restored = false;
+        if let Some(placement) = saved.and_then(|saved| restore_placement(saved, &monitors)) {
+            let _ = window.request_inner_size(LogicalSize::new(
+                placement.inner_size.width,
+                placement.inner_size.height,
+            ));
+            window.set_outer_position(PhysicalPosition::new(
+                placement.position.x,
+                placement.position.y,
+            ));
+            window.set_max_inner_size(Some(LogicalSize::new(
+                placement.max_inner_size.width,
+                placement.max_inner_size.height,
+            )));
+            restored = true;
         }
-        set_current_monitor_max_size(window);
+        if !restored {
+            let _ = set_current_monitor_max_size(window);
+        }
         window.set_maximized(maximized);
     });
 }
@@ -533,7 +726,7 @@ fn observe_window(ui: &AppWindow) -> Option<WindowObservation> {
             None
         } else {
             let scale = window.scale_factor();
-            let position = window.outer_position().ok()?.to_logical::<i32>(scale);
+            let position = window.outer_position().ok()?;
             let size = window.inner_size().to_logical::<u32>(scale);
             Some(WindowBounds {
                 x: position.x,
@@ -550,56 +743,98 @@ fn observe_window(ui: &AppWindow) -> Option<WindowObservation> {
     })?
 }
 
-fn save_preferences(
-    store: &Option<PreferenceStore>,
+fn process_writer_results(
+    ui: &AppWindow,
+    writer: &PreferenceWriter,
     tracker: &Arc<Mutex<PersistenceTracker>>,
-    preferences: AppPreferences,
 ) {
-    let Some(store) = store else {
-        return;
-    };
-    if store.save(&preferences).is_ok() {
-        tracker
-            .lock()
-            .expect("preference tracker lock")
-            .mark_persisted(preferences);
-    } else {
-        eprintln!("preferences save failed");
+    for result in writer.poll() {
+        ui.set_preference_error(preference_error_for_result(&result).into());
+        match result {
+            WriterResult::Saved(preferences) => {
+                tracker
+                    .lock()
+                    .expect("preference tracker lock")
+                    .mark_persisted(preferences);
+            }
+            WriterResult::Failed => {
+                eprintln!("preferences save failed");
+            }
+        }
+    }
+}
+
+fn preference_error_for_result(result: &WriterResult) -> &'static str {
+    match result {
+        WriterResult::Saved(_) => "",
+        WriterResult::Failed => PREFERENCE_SAVE_ERROR_RU,
     }
 }
 
 fn flush_preferences(
     ui: &AppWindow,
-    store: &Option<PreferenceStore>,
+    writer: &Arc<Mutex<PreferenceWriter>>,
     tracker: &Arc<Mutex<PersistenceTracker>>,
 ) {
-    let Some(observation) = observe_window(ui) else {
-        return;
+    let observation = observe_window(ui);
+    let preferences = {
+        let tracker = tracker.lock().expect("preference tracker lock");
+        observation.as_ref().map_or_else(
+            || tracker.persisted.clone(),
+            |value| tracker.preferences_for(value),
+        )
     };
-    let preferences = tracker
+    let saved = writer
         .lock()
-        .expect("preference tracker lock")
-        .changed_preferences_for(&observation);
-    if let Some(preferences) = preferences {
-        save_preferences(store, tracker, preferences);
+        .expect("preference writer lock")
+        .stop_and_flush(&preferences);
+    if saved {
+        tracker
+            .lock()
+            .expect("preference tracker lock")
+            .mark_persisted(preferences);
+        ui.set_preference_error("".into());
+    } else {
+        ui.set_preference_error(PREFERENCE_SAVE_ERROR_RU.into());
+        eprintln!("preferences save failed");
     }
 }
 
 fn wire_preference_persistence(
     ui: &AppWindow,
-    store: Arc<Option<PreferenceStore>>,
+    writer: Arc<Mutex<PreferenceWriter>>,
     tracker: Arc<Mutex<PersistenceTracker>>,
 ) -> Timer {
     let timer = Timer::default();
     let weak = ui.as_weak();
+    let last_monitor_signature = Cell::new(None);
     timer.start(TimerMode::Repeated, Duration::from_millis(500), move || {
-        let observation = weak.upgrade().and_then(|ui| observe_window(&ui));
+        let Some(ui) = weak.upgrade() else {
+            return;
+        };
+        if let Some(current) = ui.window().with_winit_window(current_monitor_signature) {
+            let previous = last_monitor_signature.get();
+            if monitor_cap_changed(previous, current)
+                && let Some(applied) = ui.window().with_winit_window(set_current_monitor_max_size)
+            {
+                last_monitor_signature.set(applied);
+            }
+        }
+        process_writer_results(
+            &ui,
+            &writer.lock().expect("preference writer lock"),
+            &tracker,
+        );
+        let observation = observe_window(&ui);
         let preferences = tracker
             .lock()
             .expect("preference tracker lock")
             .observe(observation);
         if let Some(preferences) = preferences {
-            save_preferences(&store, &tracker, preferences);
+            writer
+                .lock()
+                .expect("preference writer lock")
+                .enqueue(preferences);
         }
     });
     timer
@@ -716,7 +951,7 @@ fn wire_window_controls(ui: &AppWindow, tray_available: bool) {
         };
         if let Some(ui) = weak.upgrade() {
             let _ = ui.window().with_winit_window(|window| {
-                set_current_monitor_max_size(window);
+                let _ = set_current_monitor_max_size(window);
                 #[cfg(windows)]
                 let _ = window.drag_resize_window(edge.into());
                 #[cfg(not(windows))]
@@ -729,6 +964,7 @@ fn wire_window_controls(ui: &AppWindow, tray_available: bool) {
     ui.on_window_toggle_maximize(move || {
         if let Some(ui) = weak.upgrade() {
             let window = ui.window();
+            let _ = window.with_winit_window(set_current_monitor_max_size);
             window.set_maximized(next_maximized(window.is_maximized()));
         }
     });
@@ -794,7 +1030,7 @@ fn handle_tray_command(
     weak: &slint::Weak<AppWindow>,
     model: &Arc<Mutex<DesktopViewModel>>,
     command: TrayCommand,
-    preference_store: &Option<PreferenceStore>,
+    preference_writer: &Arc<Mutex<PreferenceWriter>>,
     preference_tracker: &Arc<Mutex<PersistenceTracker>>,
 ) {
     let Some(ui) = weak.upgrade() else {
@@ -827,7 +1063,7 @@ fn handle_tray_command(
             ui.invoke_select_catalog_node(node_id.into());
         }
         TrayCommand::Exit => {
-            flush_preferences(&ui, preference_store, preference_tracker);
+            flush_preferences(&ui, preference_writer, preference_tracker);
             let _ = slint::quit_event_loop();
         }
     }
@@ -1563,11 +1799,14 @@ fn apply_catalog(ui: &AppWindow, catalog: &CatalogPresentation) {
 #[cfg(test)]
 mod window_tests {
     use super::{
-        LaunchArguments, LaunchMode, PersistenceTracker, WindowObservation,
-        activation_for_launch_arguments, initial_window_visible, next_maximized,
-        parse_launch_arguments, runtime_allows_update, visible_page_from_name, visible_page_name,
+        LaunchArguments, LaunchMode, PREFERENCE_RETRY_DELAYS, PREFERENCE_SAVE_ERROR_RU,
+        PersistenceTracker, PreferenceWriter, WindowObservation, WriterCommand, WriterResult,
+        activation_for_launch_arguments, drain_latest_write, initial_window_visible,
+        next_maximized, parse_launch_arguments, preference_error_for_result,
+        retry_delay_after_failure, runtime_allows_update, scale_factor_milli,
+        visible_page_from_name, visible_page_name,
     };
-    use crate::preferences::{AppPreferences, VisiblePage, WindowBounds};
+    use crate::preferences::{AppPreferences, PreferenceStore, VisiblePage, WindowBounds};
     use crate::single_instance::Activation;
     use crate::view_model::UiState;
     use crate::windows_shell::{
@@ -1579,6 +1818,16 @@ mod window_tests {
     fn maximize_toggle_inverts_current_window_state() {
         assert!(next_maximized(false));
         assert!(!next_maximized(true));
+    }
+
+    #[test]
+    fn winit_scale_factor_is_bounded_before_entering_placement_model() {
+        assert_eq!(scale_factor_milli(1.0), Some(1_000));
+        assert_eq!(scale_factor_milli(2.0), Some(2_000));
+        assert_eq!(scale_factor_milli(f64::NAN), None);
+        assert_eq!(scale_factor_milli(f64::INFINITY), None);
+        assert_eq!(scale_factor_milli(0.49), None);
+        assert_eq!(scale_factor_milli(8.01), None);
     }
 
     #[test]
@@ -1639,6 +1888,107 @@ mod window_tests {
     }
 
     #[test]
+    fn persistence_queue_coalesces_latest_and_suppresses_failed_snapshot_repeats() {
+        let mut first = AppPreferences {
+            visible_page: VisiblePage::Home,
+            ..AppPreferences::default()
+        };
+        let second = AppPreferences {
+            visible_page: VisiblePage::Status,
+            ..first.clone()
+        };
+        let third = AppPreferences {
+            visible_page: VisiblePage::Settings,
+            ..first.clone()
+        };
+        let (sender, receiver) = std::sync::mpsc::channel();
+        sender.send(WriterCommand::Write(second.clone())).unwrap();
+        sender.send(WriterCommand::Write(third.clone())).unwrap();
+        assert!(!drain_latest_write(&receiver, &mut first));
+        assert_eq!(first, third);
+
+        let (sender, receiver) = std::sync::mpsc::channel();
+        sender.send(WriterCommand::Write(second.clone())).unwrap();
+        sender.send(WriterCommand::Stop).unwrap();
+        assert!(drain_latest_write(&receiver, &mut first));
+        assert_eq!(first, second);
+
+        let mut tracker = PersistenceTracker::new(AppPreferences::default());
+        let changed = WindowObservation {
+            restored_bounds: None,
+            maximized: false,
+            visible_page: VisiblePage::Settings,
+        };
+        assert_eq!(tracker.observe(Some(changed.clone())), None);
+        assert!(tracker.observe(Some(changed.clone())).is_some());
+        for _ in 0..4 {
+            assert_eq!(tracker.observe(Some(changed.clone())), None);
+        }
+        assert_eq!(PREFERENCE_RETRY_DELAYS.len() + 1, 3);
+        assert_eq!(
+            retry_delay_after_failure(1),
+            Some(std::time::Duration::from_secs(1))
+        );
+        assert_eq!(
+            retry_delay_after_failure(2),
+            Some(std::time::Duration::from_secs(2))
+        );
+        assert_eq!(retry_delay_after_failure(3), None);
+        assert_eq!(retry_delay_after_failure(4), None);
+    }
+
+    #[test]
+    fn writer_results_expose_only_bounded_safe_russian_error_and_success_clears_it() {
+        assert_eq!(
+            preference_error_for_result(&WriterResult::Failed),
+            PREFERENCE_SAVE_ERROR_RU
+        );
+        assert_eq!(
+            preference_error_for_result(&WriterResult::Saved(AppPreferences::default())),
+            ""
+        );
+        assert!(!PREFERENCE_SAVE_ERROR_RU.is_ascii());
+        assert!(PREFERENCE_SAVE_ERROR_RU.chars().count() < 64);
+        assert!(!PREFERENCE_SAVE_ERROR_RU.contains("http"));
+        assert!(!PREFERENCE_SAVE_ERROR_RU.contains(":\\"));
+    }
+
+    #[test]
+    fn writer_shutdown_drains_pending_snapshots_in_order() {
+        let root = tempfile::tempdir().unwrap();
+        let store = PreferenceStore::at(root.path().join("preferences.json"));
+        let mut writer = PreferenceWriter::start(Some(store.clone()));
+        writer.enqueue(AppPreferences {
+            visible_page: VisiblePage::Status,
+            ..AppPreferences::default()
+        });
+        writer.enqueue(AppPreferences {
+            visible_page: VisiblePage::Settings,
+            ..AppPreferences::default()
+        });
+        writer.stop();
+        assert_eq!(store.load().unwrap().visible_page, VisiblePage::Settings);
+    }
+
+    #[test]
+    #[ignore = "manual event-loop enqueue benchmark"]
+    fn preference_enqueue_latency_baseline() {
+        let mut writer = PreferenceWriter::start(None);
+        let preferences = AppPreferences::default();
+        let started = std::time::Instant::now();
+        for _ in 0..1_000 {
+            writer.enqueue(preferences.clone());
+        }
+        let elapsed = started.elapsed();
+        println!(
+            "preference enqueue: {:?} total, {:?} average",
+            elapsed,
+            elapsed / 1_000
+        );
+        writer.stop();
+    }
+
+    #[test]
     fn maximized_observation_preserves_last_restored_bounds() {
         let initial = AppPreferences {
             restored_bounds: Some(WindowBounds {
@@ -1673,7 +2023,33 @@ mod window_tests {
         assert!(rust.contains("drag_resize_window"));
         assert!(rust.contains("PreferenceStore::from_local_app_data()"));
         assert!(rust.contains("TimerMode::Repeated, Duration::from_millis(500)"));
-        assert!(rust.contains("flush_preferences"));
+        assert!(rust.contains("stop_and_flush"));
+        let exit_branch = rust
+            .split("TrayCommand::Exit => {")
+            .nth(1)
+            .and_then(|source| source.split("}").next())
+            .expect("tray Exit branch");
+        assert!(
+            exit_branch.find("flush_preferences").unwrap()
+                < exit_branch.find("quit_event_loop").unwrap()
+        );
+        let timer = rust
+            .split("fn wire_preference_persistence(")
+            .nth(1)
+            .and_then(|source| source.split("fn wire_updater").next())
+            .expect("preference timer");
+        assert!(timer.contains(".enqueue(preferences)"));
+        assert!(!timer.contains(".save("));
+        assert!(timer.contains("monitor_cap_changed"));
+        let maximize = rust
+            .split("ui.on_window_toggle_maximize")
+            .nth(1)
+            .and_then(|source| source.split("ui.on_window_close").next())
+            .expect("maximize callback");
+        assert!(
+            maximize.find("set_current_monitor_max_size").unwrap()
+                < maximize.find("set_maximized").unwrap()
+        );
         assert!(!slint.contains("max-width: 1120px"));
         assert!(!slint.contains("max-height: 1000px"));
         assert!(slint.contains("callback window-resize(string)"));
@@ -1682,10 +2058,13 @@ mod window_tests {
             .nth(1)
             .and_then(|source| source.split("key-pressed(event)").next())
             .expect("inset visual frame");
-        assert!(visual_frame.contains("x: 6px;"));
-        assert!(visual_frame.contains("y: 6px;"));
-        assert!(visual_frame.contains("width: parent.width - 12px;"));
-        assert!(visual_frame.contains("height: parent.height - 12px;"));
+        assert!(slint.contains("private property <length> resize-border: 6px;"));
+        assert!(visual_frame.contains("x: root.resize-border;"));
+        assert!(visual_frame.contains("y: root.resize-border;"));
+        assert!(visual_frame.contains("width: parent.width - 2 * root.resize-border;"));
+        assert!(visual_frame.contains("height: parent.height - 2 * root.resize-border;"));
+        assert!(slint.contains("in property <string> preference-error;"));
+        assert!(slint.contains("text: root.preference-error"));
         for edge in ["n", "ne", "e", "se", "s", "sw", "w", "nw"] {
             assert!(parse_resize_edge(edge).is_some(), "missing {edge}");
             assert!(

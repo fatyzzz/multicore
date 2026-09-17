@@ -36,11 +36,52 @@ pub enum ResizeEdge {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MonitorRect {
+    /// Physical desktop coordinate in Winit's shared monitor coordinate space.
+    pub x: i32,
+    /// Physical desktop coordinate in Winit's shared monitor coordinate space.
+    pub y: i32,
+    /// Physical work-area width.
+    pub width: u32,
+    /// Physical work-area height.
+    pub height: u32,
+    /// Monitor scale factor multiplied by 1000. Valid values are 500..=8000.
+    pub scale_milli: u32,
+    pub primary: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MonitorSignature {
     pub x: i32,
     pub y: i32,
     pub width: u32,
     pub height: u32,
-    pub primary: bool,
+    pub scale_milli: u32,
+}
+
+pub fn monitor_cap_changed(
+    previous: Option<MonitorSignature>,
+    current: Option<MonitorSignature>,
+) -> bool {
+    previous != current
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PhysicalPosition {
+    pub x: i32,
+    pub y: i32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LogicalSize {
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RestoredPlacement {
+    pub position: PhysicalPosition,
+    pub inner_size: LogicalSize,
+    pub max_inner_size: LogicalSize,
 }
 
 #[cfg(test)]
@@ -171,7 +212,10 @@ pub fn close_disposition(tray_available: bool, smoke_mode: bool) -> CloseDisposi
     }
 }
 
-pub fn restore_bounds(saved: WindowBounds, monitors: &[MonitorRect]) -> Option<WindowBounds> {
+pub fn restore_placement(
+    saved: WindowBounds,
+    monitors: &[MonitorRect],
+) -> Option<RestoredPlacement> {
     let saved_is_valid = saved.width > 0 && saved.height > 0;
     let selection = saved_is_valid
         .then(|| select_intersecting_monitor(&saved, monitors))
@@ -191,19 +235,31 @@ pub fn restore_bounds(saved: WindowBounds, monitors: &[MonitorRect]) -> Option<W
     } else {
         DEFAULT_HEIGHT
     };
-    let width = bounded_dimension(requested_width, monitor.width, MIN_WIDTH);
-    let height = bounded_dimension(requested_height, monitor.height, MIN_HEIGHT);
+    let max_width = physical_to_logical(monitor.width, monitor.scale_milli);
+    let max_height = physical_to_logical(monitor.height, monitor.scale_milli);
+    let width = bounded_dimension(requested_width, max_width, MIN_WIDTH);
+    let height = bounded_dimension(requested_height, max_height, MIN_HEIGHT);
+    let physical_width = logical_to_physical(width, monitor.scale_milli);
+    let physical_height = logical_to_physical(height, monitor.scale_milli);
+    let max_inner_size = LogicalSize {
+        width: max_width,
+        height: max_height,
+    };
 
     if !intersects {
-        return Some(WindowBounds {
-            x: saturating_i32(
-                i64::from(monitor.x) + (i64::from(monitor.width) - i64::from(width)) / 2,
-            ),
-            y: saturating_i32(
-                i64::from(monitor.y) + (i64::from(monitor.height) - i64::from(height)) / 2,
-            ),
-            width,
-            height,
+        return Some(RestoredPlacement {
+            position: PhysicalPosition {
+                x: saturating_i32(
+                    i64::from(monitor.x)
+                        + (i64::from(monitor.width) - i64::from(physical_width)) / 2,
+                ),
+                y: saturating_i32(
+                    i64::from(monitor.y)
+                        + (i64::from(monitor.height) - i64::from(physical_height)) / 2,
+                ),
+            },
+            inner_size: LogicalSize { width, height },
+            max_inner_size,
         });
     }
 
@@ -211,15 +267,31 @@ pub fn restore_bounds(saved: WindowBounds, monitors: &[MonitorRect]) -> Option<W
     let monitor_top = i64::from(monitor.y);
     let monitor_right = monitor_left + i64::from(monitor.width);
     let monitor_bottom = monitor_top + i64::from(monitor.height);
-    let x_min = monitor_left - i64::from(width) + REACHABLE_TITLE_BAR.min(i64::from(width));
-    let x_max = monitor_right - REACHABLE_TITLE_BAR.min(i64::from(width));
-    let y_max = monitor_bottom - REACHABLE_TITLE_BAR.min(i64::from(monitor.height));
+    let reachable = i64::from(logical_to_physical(
+        REACHABLE_TITLE_BAR as u32,
+        monitor.scale_milli,
+    ));
+    let x_min = monitor_left - i64::from(physical_width) + reachable.min(i64::from(physical_width));
+    let x_max = monitor_right - reachable.min(i64::from(physical_width));
+    let y_max = monitor_bottom - reachable.min(i64::from(monitor.height));
 
-    Some(WindowBounds {
-        x: saturating_i32(clamp_i64(i64::from(saved.x), x_min, x_max)),
-        y: saturating_i32(clamp_i64(i64::from(saved.y), monitor_top, y_max)),
-        width,
-        height,
+    Some(RestoredPlacement {
+        position: PhysicalPosition {
+            x: saturating_i32(clamp_i64(i64::from(saved.x), x_min, x_max)),
+            y: saturating_i32(clamp_i64(i64::from(saved.y), monitor_top, y_max)),
+        },
+        inner_size: LogicalSize { width, height },
+        max_inner_size,
+    })
+}
+
+#[cfg(test)]
+pub fn restore_bounds(saved: WindowBounds, monitors: &[MonitorRect]) -> Option<WindowBounds> {
+    restore_placement(saved, monitors).map(|placement| WindowBounds {
+        x: placement.position.x,
+        y: placement.position.y,
+        width: placement.inner_size.width,
+        height: placement.inner_size.height,
     })
 }
 
@@ -230,7 +302,7 @@ fn select_intersecting_monitor<'a>(
     monitors
         .iter()
         .enumerate()
-        .filter(|(_, monitor)| monitor.width > 0 && monitor.height > 0)
+        .filter(|(_, monitor)| valid_monitor(monitor))
         .map(|(index, monitor)| (intersection_area(saved, monitor), index, monitor))
         .filter(|(area, _, _)| *area > 0)
         .max_by_key(|(area, index, _)| (*area, std::cmp::Reverse(*index)))
@@ -240,20 +312,17 @@ fn select_intersecting_monitor<'a>(
 fn select_fallback_monitor(monitors: &[MonitorRect]) -> Option<&MonitorRect> {
     monitors
         .iter()
-        .filter(|monitor| monitor.width > 0 && monitor.height > 0)
+        .filter(|monitor| valid_monitor(monitor))
         .find(|monitor| monitor.primary)
-        .or_else(|| {
-            monitors
-                .iter()
-                .find(|monitor| monitor.width > 0 && monitor.height > 0)
-        })
+        .or_else(|| monitors.iter().find(|monitor| valid_monitor(monitor)))
 }
 
 fn intersection_area(saved: &WindowBounds, monitor: &MonitorRect) -> u64 {
     let saved_left = i64::from(saved.x);
     let saved_top = i64::from(saved.y);
-    let saved_right = saved_left + i64::from(saved.width);
-    let saved_bottom = saved_top + i64::from(saved.height);
+    let saved_right = saved_left + i64::from(logical_to_physical(saved.width, monitor.scale_milli));
+    let saved_bottom =
+        saved_top + i64::from(logical_to_physical(saved.height, monitor.scale_milli));
     let monitor_left = i64::from(monitor.x);
     let monitor_top = i64::from(monitor.y);
     let monitor_right = monitor_left + i64::from(monitor.width);
@@ -262,6 +331,23 @@ fn intersection_area(saved: &WindowBounds, monitor: &MonitorRect) -> u64 {
     let width = (saved_right.min(monitor_right) - saved_left.max(monitor_left)).max(0) as u64;
     let height = (saved_bottom.min(monitor_bottom) - saved_top.max(monitor_top)).max(0) as u64;
     width.saturating_mul(height)
+}
+
+fn valid_monitor(monitor: &MonitorRect) -> bool {
+    monitor.width > 0 && monitor.height > 0 && (500..=8_000).contains(&monitor.scale_milli)
+}
+
+fn logical_to_physical(logical: u32, scale_milli: u32) -> u32 {
+    let scaled = u64::from(logical)
+        .saturating_mul(u64::from(scale_milli))
+        .saturating_add(500)
+        / 1_000;
+    scaled.min(u64::from(u32::MAX)) as u32
+}
+
+fn physical_to_logical(physical: u32, scale_milli: u32) -> u32 {
+    let scaled = u64::from(physical).saturating_mul(1_000) / u64::from(scale_milli);
+    scaled.min(u64::from(u32::MAX)) as u32
 }
 
 fn bounded_dimension(saved: u32, available: u32, minimum: u32) -> u32 {
@@ -324,8 +410,8 @@ impl From<ResizeEdge> for slint::winit_030::winit::window::ResizeDirection {
 mod tests {
     use super::{
         CloseDisposition, DEFAULT_HEIGHT, DEFAULT_WIDTH, MinimizeDisposition, MonitorRect,
-        ResizeEdge, ResizeHitLayout, close_disposition, minimize_disposition, next_maximized,
-        parse_resize_edge, restore_bounds,
+        MonitorSignature, ResizeEdge, ResizeHitLayout, close_disposition, minimize_disposition,
+        monitor_cap_changed, next_maximized, parse_resize_edge, restore_bounds, restore_placement,
     };
     use crate::preferences::WindowBounds;
 
@@ -335,6 +421,7 @@ mod tests {
             y,
             width,
             height,
+            scale_milli: 1_000,
             primary,
         }
     }
@@ -639,6 +726,147 @@ mod tests {
         }
         assert_eq!(hits[4].width, 6);
         assert_eq!(hits[4].height, 6);
+    }
+
+    #[test]
+    fn mixed_dpi_saved_physical_origin_selects_secondary_monitor() {
+        let placement = restore_placement(
+            WindowBounds {
+                x: 3_000,
+                y: 200,
+                width: 900,
+                height: 700,
+            },
+            &[
+                MonitorRect {
+                    x: 0,
+                    y: 0,
+                    width: 1_920,
+                    height: 1_040,
+                    scale_milli: 1_000,
+                    primary: true,
+                },
+                MonitorRect {
+                    x: 1_920,
+                    y: 0,
+                    width: 2_560,
+                    height: 1_400,
+                    scale_milli: 2_000,
+                    primary: false,
+                },
+            ],
+        )
+        .expect("mixed-DPI placement");
+
+        assert!(placement.position.x >= 1_920);
+        assert_eq!(placement.inner_size.width, 900);
+        assert_eq!(placement.inner_size.height, 700);
+        assert_eq!(placement.max_inner_size.width, 1_280);
+        assert_eq!(placement.max_inner_size.height, 700);
+    }
+
+    #[test]
+    fn removed_monitor_falls_back_to_primary_in_physical_space() {
+        let placement = restore_placement(
+            WindowBounds {
+                x: 7_000,
+                y: 200,
+                width: 900,
+                height: 700,
+            },
+            &[MonitorRect {
+                x: 0,
+                y: 0,
+                width: 1_920,
+                height: 1_040,
+                scale_milli: 1_000,
+                primary: true,
+            }],
+        )
+        .unwrap();
+        assert_eq!(placement.position.x, 510);
+        assert_eq!(placement.position.y, 170);
+    }
+
+    #[test]
+    fn negative_mixed_scale_monitor_keeps_physical_origin_negative() {
+        let placement = restore_placement(
+            WindowBounds {
+                x: -2_200,
+                y: -100,
+                width: 800,
+                height: 620,
+            },
+            &[
+                MonitorRect {
+                    x: 0,
+                    y: 0,
+                    width: 1_920,
+                    height: 1_040,
+                    scale_milli: 1_000,
+                    primary: true,
+                },
+                MonitorRect {
+                    x: -2_560,
+                    y: -200,
+                    width: 2_560,
+                    height: 1_440,
+                    scale_milli: 1_500,
+                    primary: false,
+                },
+            ],
+        )
+        .unwrap();
+        assert!(placement.position.x < 0);
+        assert_eq!(placement.position.y, -100);
+        assert_eq!(placement.inner_size.width, 800);
+    }
+
+    #[test]
+    fn monitor_cap_refreshes_only_when_safe_signature_changes() {
+        let first = MonitorSignature {
+            x: 0,
+            y: 0,
+            width: 1_920,
+            height: 1_040,
+            scale_milli: 1_000,
+        };
+        let second = MonitorSignature {
+            x: 1_920,
+            y: 0,
+            width: 2_560,
+            height: 1_400,
+            scale_milli: 2_000,
+        };
+        assert!(monitor_cap_changed(None, Some(first)));
+        assert!(!monitor_cap_changed(Some(first), Some(first)));
+        assert!(monitor_cap_changed(Some(first), Some(second)));
+        assert!(monitor_cap_changed(Some(second), None));
+    }
+
+    #[test]
+    fn invalid_scale_data_is_not_used_for_native_placement() {
+        for scale_milli in [0, 499, 8_001, u32::MAX] {
+            assert_eq!(
+                restore_placement(
+                    WindowBounds {
+                        x: 0,
+                        y: 0,
+                        width: 840,
+                        height: 720
+                    },
+                    &[MonitorRect {
+                        x: 0,
+                        y: 0,
+                        width: 1_920,
+                        height: 1_040,
+                        scale_milli,
+                        primary: true,
+                    }],
+                ),
+                None
+            );
+        }
     }
 
     #[test]

@@ -15,9 +15,13 @@ const MAX_PREFERENCES_BYTES: u64 = 1024 * 1024;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WindowBounds {
+    /// Winit outer-window X in physical desktop pixels.
     pub x: i32,
+    /// Winit outer-window Y in physical desktop pixels.
     pub y: i32,
+    /// Inner client width in logical pixels.
     pub width: u32,
+    /// Inner client height in logical pixels.
     pub height: u32,
 }
 
@@ -598,6 +602,7 @@ fn sync_directory(_path: &Path) -> io::Result<()> {
 mod tests {
     use std::collections::BTreeMap;
     use std::fs;
+    use std::time::Instant;
 
     use super::{
         AppPreferences, PREFERENCES_SCHEMA_VERSION, PreferenceStore, VisiblePage, WindowBounds,
@@ -619,6 +624,19 @@ mod tests {
             preference_path_from_local_app_data(Some(root.path().as_os_str().to_owned())).unwrap(),
             root.path().join("MultiCore").join("preferences.json")
         );
+    }
+
+    #[test]
+    #[ignore = "manual disk-sync baseline"]
+    fn save_latency_baseline() {
+        let root = tempfile::tempdir().unwrap();
+        let store = PreferenceStore::at(root.path().join("preferences.json"));
+        let preferences = AppPreferences::default();
+        for sample in 1..=3 {
+            let started = Instant::now();
+            store.save(&preferences).unwrap();
+            println!("preference save sample {sample}: {:?}", started.elapsed());
+        }
     }
 
     #[test]
