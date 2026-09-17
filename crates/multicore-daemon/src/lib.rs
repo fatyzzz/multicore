@@ -84,10 +84,30 @@ pub struct StatusDto {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SubscriptionInfoDto {
     pub source_name: String,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub uploaded_bytes: Option<u64>,
     pub downloaded_bytes: Option<u64>,
+    #[serde(default)]
+    pub used_bytes: Option<u64>,
     pub total_bytes: Option<u64>,
     pub expires_at_unix: Option<u64>,
     pub updated_at_unix: u64,
+    #[serde(default)]
+    pub refresh_interval_secs: Option<u64>,
+    #[serde(default)]
+    pub announcement_text: Option<String>,
+    #[serde(default)]
+    pub announcement_action_label: Option<String>,
+    #[serde(default)]
+    pub announcement_tone: Option<String>,
+    #[serde(default)]
+    pub home_available: bool,
+    #[serde(default)]
+    pub support_available: bool,
+    #[serde(default)]
+    pub announcement_action_available: bool,
     pub refresh_available: bool,
 }
 
@@ -1162,10 +1182,27 @@ impl<P: ProcessController> CoreRuntime<P> {
                     .subscription_info()
                     .map(|info| SubscriptionInfoDto {
                         source_name: info.source_host.clone(),
+                        display_name: info.display_name.clone(),
+                        uploaded_bytes: info.uploaded_bytes,
                         downloaded_bytes: info.downloaded_bytes,
+                        used_bytes: info.used_bytes(),
                         total_bytes: info.total_bytes,
                         expires_at_unix: info.expires_at_unix,
                         updated_at_unix: info.updated_at_unix,
+                        refresh_interval_secs: info.refresh_interval_secs,
+                        announcement_text: info
+                            .announcement_text
+                            .as_deref()
+                            .map(|text| text.chars().take(512).collect()),
+                        announcement_action_label: info.announcement_action_label.clone(),
+                        announcement_tone: info
+                            .announcement_tone
+                            .map(|tone| tone.as_str().to_owned()),
+                        home_available: snapshot.subscription_home_url().is_some(),
+                        support_available: snapshot.subscription_support_url().is_some(),
+                        announcement_action_available: snapshot
+                            .subscription_announcement_url()
+                            .is_some(),
                         refresh_available: snapshot.subscription_source_url().is_some(),
                     })
             }),

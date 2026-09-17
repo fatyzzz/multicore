@@ -25,17 +25,39 @@ proxy-groups:
     proxies: [Test Node]
 "#;
 
+const SOURCE_URL_CANARY: &str =
+    "https://user:source-password@source-canary.invalid/sub?source_token=source-canary";
+const HOME_URL_CANARY: &str = "https://home-url-canary.invalid/private-home";
+const SUPPORT_URL_CANARY: &str = "tg://resolve?domain=support_url_canary";
+const ANNOUNCEMENT_URL_CANARY: &str =
+    "https://announcement-url-canary.invalid/news?action_token=announcement-canary";
+const LOGO_URL_CANARY: &str = "https://logo-url-canary.invalid/private-logo.png";
+const RAW_HEADER_NAME_CANARY: &str = "x-raw-header-name-canary";
+const RAW_HEADER_VALUE_CANARY: &str = "raw-header-value-canary";
+const MIHOMO_BODY_CANARY: &str = "mihomo-body-canary.invalid";
+const XRAY_BODY_CANARY: &str = "xray-body-canary";
+
+#[derive(Clone, Copy)]
+enum FixtureMetadata {
+    Standard,
+    Maximal,
+}
+
 #[derive(Clone)]
 struct FixtureHttp {
     calls: Arc<Mutex<Vec<&'static str>>>,
-    mihomo: &'static str,
+    mihomo: String,
+    xray: String,
+    metadata: FixtureMetadata,
 }
 
 impl Default for FixtureHttp {
     fn default() -> Self {
         Self {
             calls: Arc::default(),
-            mihomo: MIHOMO,
+            mihomo: MIHOMO.to_owned(),
+            xray: "{}".to_owned(),
+            metadata: FixtureMetadata::Standard,
         }
     }
 }
@@ -44,8 +66,93 @@ impl FixtureHttp {
     fn with_mihomo(mihomo: &'static str) -> Self {
         Self {
             calls: Arc::default(),
-            mihomo,
+            mihomo: mihomo.to_owned(),
+            xray: "{}".to_owned(),
+            metadata: FixtureMetadata::Standard,
         }
+    }
+
+    fn maximal(mihomo: String, xray: String) -> Self {
+        Self {
+            calls: Arc::default(),
+            mihomo,
+            xray,
+            metadata: FixtureMetadata::Maximal,
+        }
+    }
+}
+
+fn maximal_fixture() -> (FixtureHttp, String, String, String) {
+    let display_name = "Д".repeat(128);
+    let group_name = "Г".repeat(256);
+    let node_name = "У".repeat(256);
+    let mihomo = format!(
+        "proxies:\n  - name: '{node_name}'\n    type: socks5\n    server: {MIHOMO_BODY_CANARY}\n    port: 443\nproxy-groups:\n  - name: '{group_name}'\n    type: select\n    proxies: ['{node_name}']\n"
+    );
+    let xray = format!(r#"{{"private_config_marker":"{XRAY_BODY_CANARY}"}}"#);
+    (
+        FixtureHttp::maximal(mihomo, xray),
+        display_name,
+        group_name,
+        node_name,
+    )
+}
+
+fn metadata_headers(metadata: FixtureMetadata) -> Vec<(String, String)> {
+    match metadata {
+        FixtureMetadata::Standard => vec![
+            (
+                "subscription-userinfo".into(),
+                "upload=18446744073709551615; download=938375741110; total=0; expire=1792851157"
+                    .into(),
+            ),
+            ("profile-title".into(), "Provider Plus".into()),
+            ("profile-update-interval".into(), "6".into()),
+            (
+                "announce".into(),
+                "  Planned   maintenance tonight  ".into(),
+            ),
+            ("sub-info-button-text".into(), "Read more".into()),
+            ("sub-info-color".into(), "green".into()),
+            (
+                "profile-web-page-url".into(),
+                "https://provider.example/home".into(),
+            ),
+            (
+                "support-url".into(),
+                "tg://resolve?domain=provider_help".into(),
+            ),
+            (
+                "announce-url".into(),
+                "https://provider.example/news?token=hidden".into(),
+            ),
+            (
+                "flclashx-servicelogo".into(),
+                "https://provider.example/logo.png".into(),
+            ),
+        ],
+        FixtureMetadata::Maximal => vec![
+            (
+                "subscription-userinfo".into(),
+                format!(
+                    "upload={}; download=938375741110; total=18446744073709551615; expire=1792851157; ignored={RAW_HEADER_VALUE_CANARY}",
+                    u64::MAX
+                ),
+            ),
+            ("profile-title".into(), "Д".repeat(128)),
+            ("profile-update-interval".into(), "720".into()),
+            ("announce".into(), "А".repeat(512)),
+            ("sub-info-button-text".into(), "К".repeat(32)),
+            ("sub-info-color".into(), "green".into()),
+            ("profile-web-page-url".into(), HOME_URL_CANARY.into()),
+            ("support-url".into(), SUPPORT_URL_CANARY.into()),
+            ("announce-url".into(), ANNOUNCEMENT_URL_CANARY.into()),
+            ("flclashx-servicelogo".into(), LOGO_URL_CANARY.into()),
+            (
+                RAW_HEADER_NAME_CANARY.into(),
+                RAW_HEADER_VALUE_CANARY.into(),
+            ),
+        ],
     }
 }
 
@@ -56,16 +163,15 @@ impl HttpClient for FixtureHttp {
         user_agent: &'static str,
     ) -> Pin<Box<dyn Future<Output = Result<HttpResponse, FetchError>> + Send + 'a>> {
         self.calls.lock().unwrap().push(user_agent);
-        let mihomo = self.mihomo;
+        let mihomo = self.mihomo.clone();
+        let xray = self.xray.clone();
+        let metadata = self.metadata;
         Box::pin(async move {
             let response = match user_agent {
                 UA_NATIVE => HttpResponse::new(
                     200,
-                    format!("[{},{{}}]", serde_json::to_string(mihomo).unwrap()).into_bytes(),
-                    [(
-                        "subscription-userinfo",
-                        "upload=0; download=938375741110; total=0; expire=1792851157",
-                    )],
+                    format!("[{},{}]", serde_json::to_string(&mihomo).unwrap(), xray).into_bytes(),
+                    metadata_headers(metadata),
                 ),
                 UA_MIHOMO => HttpResponse::new(
                     200,
@@ -76,7 +182,7 @@ impl HttpClient for FixtureHttp {
                     )],
                 ),
                 UA_XRAY => {
-                    HttpResponse::new(200, br#"{}"#.to_vec(), std::iter::empty::<(&str, &str)>())
+                    HttpResponse::new(200, xray.into_bytes(), std::iter::empty::<(&str, &str)>())
                 }
                 _ => return Err(FetchError::Network),
             };
@@ -102,7 +208,7 @@ impl HttpClient for OfflineHttp {
 async fn imported_source_exposes_safe_metadata_and_can_refresh_without_resubmitting_url() {
     let root = tempfile::tempdir().unwrap();
     let store = PersistentSnapshotStore::open(root.path()).unwrap();
-    let http = FixtureHttp::default();
+    let (http, expected_display_name, expected_group_name, expected_node_name) = maximal_fixture();
     let calls = http.calls.clone();
     let backend = CoreBackend::new(store, SubscriptionFetcher::new(http), |_snapshot| {
         Ok(Arc::new(RecordingController::default()))
@@ -111,51 +217,238 @@ async fn imported_source_exposes_safe_metadata_and_can_refresh_without_resubmitt
 
     let imported = backend
         .import_subscription(ImportSubscriptionRequest {
-            url: "https://user:secret@example.invalid/sub?token=private".into(),
+            url: SOURCE_URL_CANARY.into(),
         })
         .await
         .unwrap();
-    let info = imported.subscription.unwrap();
-    assert_eq!(info.source_name, "example.invalid");
+    assert_eq!(
+        imported.profile.as_deref(),
+        Some(expected_group_name.as_str())
+    );
+    assert_eq!(
+        imported.current_node.as_deref(),
+        Some(expected_node_name.as_str())
+    );
+    assert_eq!(imported.profile.as_ref().unwrap().chars().count(), 256);
+    assert_eq!(imported.current_node.as_ref().unwrap().chars().count(), 256);
+    let info = imported.subscription.as_ref().unwrap();
+    assert_eq!(info.source_name, "source-canary.invalid");
+    assert_eq!(info.display_name, expected_display_name);
+    assert_eq!(info.display_name.chars().count(), 128);
+    assert_eq!(info.uploaded_bytes, Some(u64::MAX));
     assert_eq!(info.downloaded_bytes, Some(938_375_741_110));
-    assert_eq!(info.total_bytes, None);
+    assert_eq!(info.used_bytes, Some(u64::MAX));
+    assert_eq!(info.total_bytes, Some(u64::MAX));
     assert_eq!(info.expires_at_unix, Some(1_792_851_157));
     assert!(info.updated_at_unix > 0);
+    assert_eq!(info.refresh_interval_secs, Some(30 * 24 * 60 * 60));
+    assert_eq!(
+        info.announcement_text.as_ref().unwrap().chars().count(),
+        512
+    );
+    assert_eq!(
+        info.announcement_action_label
+            .as_ref()
+            .unwrap()
+            .chars()
+            .count(),
+        32
+    );
+    assert_eq!(info.announcement_tone.as_deref(), Some("success"));
+    assert!(info.home_available);
+    assert!(info.support_available);
+    assert!(info.announcement_action_available);
     assert!(info.refresh_available);
+
+    let serialized = serde_json::to_string(&imported).unwrap();
+    assert!(serialized.len() < 64 * 1024);
+    for secret in [
+        SOURCE_URL_CANARY,
+        "source-password",
+        "source_token=source-canary",
+        HOME_URL_CANARY,
+        SUPPORT_URL_CANARY,
+        ANNOUNCEMENT_URL_CANARY,
+        LOGO_URL_CANARY,
+        RAW_HEADER_NAME_CANARY,
+        RAW_HEADER_VALUE_CANARY,
+        MIHOMO_BODY_CANARY,
+        XRAY_BODY_CANARY,
+        "subscription-userinfo",
+        "profile-web-page-url",
+        "support-url",
+        "announce-url",
+        "flclashx-servicelogo",
+    ] {
+        assert!(
+            !serialized.contains(secret),
+            "leaked {secret}: {serialized}"
+        );
+    }
 
     let refreshed = backend.refresh_subscription().await.unwrap();
     assert!(refreshed.subscription.as_ref().unwrap().refresh_available);
+    assert_eq!(refreshed.profile, imported.profile);
+    assert_eq!(refreshed.current_node, imported.current_node);
     assert_eq!(*calls.lock().unwrap(), [UA_NATIVE, UA_NATIVE]);
-    assert!(!format!("{refreshed:?}").contains("private"));
+    assert!(!format!("{refreshed:?}").contains("source-password"));
+}
+
+#[test]
+fn subscription_dto_deserializes_legacy_payloads_with_safe_defaults() {
+    let info: multicore_daemon::SubscriptionInfoDto = serde_json::from_value(serde_json::json!({
+        "source_name": "legacy.example",
+        "downloaded_bytes": 7,
+        "total_bytes": 10,
+        "expires_at_unix": null,
+        "updated_at_unix": 123,
+        "refresh_available": true
+    }))
+    .unwrap();
+
+    assert_eq!(info.source_name, "legacy.example");
+    assert_eq!(info.display_name, "");
+    assert_eq!(info.uploaded_bytes, None);
+    assert_eq!(info.used_bytes, None);
+    assert_eq!(info.refresh_interval_secs, None);
+    assert_eq!(info.announcement_text, None);
+    assert_eq!(info.announcement_action_label, None);
+    assert_eq!(info.announcement_tone, None);
+    assert!(!info.home_available);
+    assert!(!info.support_available);
+    assert!(!info.announcement_action_available);
+}
+
+fn assert_safe_subscription_metadata_eq(
+    expected: &multicore_daemon::SubscriptionInfoDto,
+    actual: &multicore_daemon::SubscriptionInfoDto,
+) {
+    assert_eq!(actual.source_name, expected.source_name);
+    assert_eq!(actual.display_name, expected.display_name);
+    assert_eq!(actual.uploaded_bytes, expected.uploaded_bytes);
+    assert_eq!(actual.downloaded_bytes, expected.downloaded_bytes);
+    assert_eq!(actual.used_bytes, expected.used_bytes);
+    assert_eq!(actual.total_bytes, expected.total_bytes);
+    assert_eq!(actual.expires_at_unix, expected.expires_at_unix);
+    assert_eq!(actual.updated_at_unix, expected.updated_at_unix);
+    assert_eq!(actual.refresh_interval_secs, expected.refresh_interval_secs);
+    assert_eq!(actual.announcement_text, expected.announcement_text);
+    assert_eq!(
+        actual.announcement_action_label,
+        expected.announcement_action_label
+    );
+    assert_eq!(actual.announcement_tone, expected.announcement_tone);
+    assert_eq!(actual.home_available, expected.home_available);
+    assert_eq!(actual.support_available, expected.support_available);
+    assert_eq!(
+        actual.announcement_action_available,
+        expected.announcement_action_available
+    );
+    assert_eq!(actual.refresh_available, expected.refresh_available);
 }
 
 #[tokio::test]
 async fn failed_refresh_keeps_last_good_profile_ready_and_safe_metadata_visible() {
     let root = tempfile::tempdir().unwrap();
     let store = PersistentSnapshotStore::open(root.path()).unwrap();
-    let snapshot = Snapshot::parse(MIHOMO.as_bytes(), br#"{}"#)
-        .unwrap()
-        .with_subscription_source(
-            "https://example.invalid/private?token=secret",
-            Some("download=1073741824; total=0; expire=1792851157"),
-            1_789_405_200,
-        )
+    let (http, _, expected_group_name, expected_node_name) = maximal_fixture();
+    let backend = CoreBackend::new(store, SubscriptionFetcher::new(http), |_snapshot| {
+        Ok(Arc::new(RecordingController::default()))
+    })
+    .unwrap();
+    let imported = backend
+        .import_subscription(ImportSubscriptionRequest {
+            url: SOURCE_URL_CANARY.into(),
+        })
+        .await
         .unwrap();
-    store.commit(snapshot).unwrap();
+    let expected = imported.subscription.as_ref().unwrap().clone();
+    assert!(expected.home_available);
+    assert!(expected.support_available);
+    assert!(expected.announcement_action_available);
+    assert_eq!(
+        imported.profile.as_deref(),
+        Some(expected_group_name.as_str())
+    );
+    assert_eq!(
+        imported.current_node.as_deref(),
+        Some(expected_node_name.as_str())
+    );
+
+    drop(backend);
+    let store = PersistentSnapshotStore::open(root.path()).unwrap();
     let backend = CoreBackend::new(store, SubscriptionFetcher::new(OfflineHttp), |_snapshot| {
         Ok(Arc::new(RecordingController::default()))
     })
     .unwrap();
+    let before_failure = backend.status().await.unwrap();
+    assert_safe_subscription_metadata_eq(&expected, before_failure.subscription.as_ref().unwrap());
+    assert_eq!(before_failure.profile, imported.profile);
+    assert_eq!(before_failure.current_node, imported.current_node);
 
     assert!(backend.refresh_subscription().await.is_err());
+    let after_failure = backend.status().await.unwrap();
+    assert_eq!(after_failure.state, ConnectionState::Ready);
+    assert_safe_subscription_metadata_eq(&expected, after_failure.subscription.as_ref().unwrap());
+    assert_eq!(after_failure.profile, imported.profile);
+    assert_eq!(after_failure.current_node, imported.current_node);
+    assert!(!format!("{after_failure:?}").contains("source-password"));
+
+    drop(backend);
+    let store = PersistentSnapshotStore::open(root.path()).unwrap();
+    let restarted = CoreBackend::new(store, SubscriptionFetcher::new(OfflineHttp), |_snapshot| {
+        Ok(Arc::new(RecordingController::default()))
+    })
+    .unwrap();
+    let after_restart = restarted.status().await.unwrap();
+    assert_safe_subscription_metadata_eq(&expected, after_restart.subscription.as_ref().unwrap());
+    assert_eq!(after_restart.profile, imported.profile);
+    assert_eq!(after_restart.current_node, imported.current_node);
+}
+
+#[tokio::test]
+async fn legacy_persisted_subscription_without_display_name_uses_source_host_fallback() {
+    let root = tempfile::tempdir().unwrap();
+    let store = PersistentSnapshotStore::open(root.path()).unwrap();
+    store
+        .commit(
+            Snapshot::parse(MIHOMO.as_bytes(), br#"{}"#)
+                .unwrap()
+                .with_subscription_source(
+                    "https://legacy-host-canary.invalid/private?token=hidden",
+                    Some("download=7"),
+                    1_789_405_200,
+                )
+                .unwrap(),
+        )
+        .unwrap();
+    drop(store);
+
+    let generation = std::fs::read_dir(root.path())
+        .unwrap()
+        .filter_map(Result::ok)
+        .find(|entry| entry.file_name().to_string_lossy().starts_with("snapshot-"))
+        .unwrap();
+    let subscription_path = generation.path().join("subscription.json");
+    let mut persisted: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&subscription_path).unwrap()).unwrap();
+    persisted["info"]
+        .as_object_mut()
+        .unwrap()
+        .remove("display_name");
+    std::fs::write(&subscription_path, serde_json::to_vec(&persisted).unwrap()).unwrap();
+
+    let store = PersistentSnapshotStore::open(root.path()).unwrap();
+    let backend = CoreBackend::new(store, SubscriptionFetcher::new(OfflineHttp), |_snapshot| {
+        Ok(Arc::new(RecordingController::default()))
+    })
+    .unwrap();
     let status = backend.status().await.unwrap();
-    assert_eq!(status.state, ConnectionState::Ready);
+    let info = status.subscription.unwrap();
+    assert_eq!(info.source_name, "legacy-host-canary.invalid");
+    assert_eq!(info.display_name, "legacy-host-canary.invalid");
     assert_eq!(status.profile.as_deref(), Some("Main"));
-    assert_eq!(
-        status.subscription.as_ref().unwrap().downloaded_bytes,
-        Some(1_073_741_824)
-    );
-    assert!(!format!("{status:?}").contains("secret"));
+    assert_eq!(status.current_node.as_deref(), Some("Test Node"));
 }
 
 #[tokio::test]
