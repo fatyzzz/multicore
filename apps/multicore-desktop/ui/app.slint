@@ -517,12 +517,6 @@ export component AppWindow inherits Window {
         main-pane := Rectangle {
             background: Theme.canvas;
 
-            // Local signal grid: structural guides, intentionally almost invisible.
-            Rectangle { x: parent.width / 3; width: 1px; height: parent.height; background: #ffffff05; }
-            Rectangle { x: parent.width * 2 / 3; width: 1px; height: parent.height; background: #ffffff05; }
-            Rectangle { y: parent.height / 3; width: parent.width; height: 1px; background: #ffffff05; }
-            Rectangle { y: parent.height * 2 / 3; width: parent.width; height: 1px; background: #ffffff05; }
-
             if root.visible-page == "home": Rectangle {
                 background: transparent;
                 VerticalLayout {
@@ -535,6 +529,7 @@ export component AppWindow inherits Window {
                         border-color: root.status-tone == "success" ? #3ccb7f66 : root.status-tone == "danger" ? #f06a6a66 : #4c9dff55;
                         border-width: 1px;
                         border-radius: 18px;
+                        clip: true;
                         HorizontalLayout {
                             padding-left: 14px;
                             padding-right: 14px;
@@ -562,6 +557,42 @@ export component AppWindow inherits Window {
                                         return accept;
                                     }
                                     return reject;
+                                }
+
+                                // Signature interaction: the signal mesh exists only around the
+                                // connection control and follows the pointer without a timer.
+                                signal-mesh-field := Rectangle {
+                                    property <length> cursor-x: power-touch.has-hover ? 72px + power-touch.mouse-x : 108px;
+                                    property <length> cursor-y: power-touch.has-hover ? 12px + power-touch.mouse-y : 48px;
+                                    property <color> glow-strong: root.status-tone == "success" ? #3ccb7f3d : root.status-tone == "danger" ? #f06a6a3d : #4c9dff42;
+                                    property <color> glow-soft: root.status-tone == "success" ? #3ccb7f16 : root.status-tone == "danger" ? #f06a6a16 : #4c9dff18;
+                                    x: -72px;
+                                    y: -12px;
+                                    width: 216px;
+                                    height: 96px;
+                                    border-radius: 24px;
+                                    clip: true;
+                                    opacity: power-touch.has-hover ? 1 : power-action.has-focus ? 0.68 : 0.12;
+                                    background: @radial-gradient(
+                                        circle 108px at cursor-x cursor-y,
+                                        glow-strong 0%,
+                                        glow-soft 46%,
+                                        #00000000 100%
+                                    );
+                                    animate opacity { duration: 180ms; easing: ease-out; }
+
+                                    for _[grid-x] in 28: Rectangle {
+                                        x: grid-x * 8px;
+                                        width: 1px;
+                                        height: parent.height;
+                                        background: root.status-tone == "success" ? #66e8a652 : root.status-tone == "danger" ? #ff8b8b52 : #77b8ff5c;
+                                    }
+                                    for _[grid-y] in 13: Rectangle {
+                                        y: grid-y * 8px;
+                                        width: parent.width;
+                                        height: 1px;
+                                        background: root.status-tone == "success" ? #66e8a652 : root.status-tone == "danger" ? #ff8b8b52 : #77b8ff5c;
+                                    }
                                 }
 
                                 power-button := Rectangle {
@@ -615,10 +646,15 @@ export component AppWindow inherits Window {
                                         image-fit: contain;
                                         accessible-role: none;
                                     }
-                                    power-touch := TouchArea {
-                                        enabled: root.primary-enabled;
-                                        clicked => { root.primary-action(); }
-                                    }
+                                }
+
+                                power-touch := TouchArea {
+                                    x: 0;
+                                    y: 0;
+                                    width: parent.width;
+                                    height: parent.height;
+                                    enabled: root.primary-enabled;
+                                    clicked => { root.primary-action(); }
                                 }
                             }
                             VerticalLayout {

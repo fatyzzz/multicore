@@ -161,6 +161,7 @@ export component QuietChip inherits Rectangle {
     border-color: chip-focus.has-focus ? Theme.focus : root.selected ? #4c9dff66 : #ffffff12;
     border-width: chip-focus.has-focus ? Theme.focus-width : 1px;
     border-radius: 14px;
+    clip: true;
     opacity: root.enabled ? 1 : 0.5;
     accessible-role: button;
     accessible-label: root.state-label;
@@ -169,6 +170,19 @@ export component QuietChip inherits Rectangle {
         if (root.enabled) {
             root.activated();
         }
+    }
+
+    chip-cursor-wash := Rectangle {
+        property <length> cursor-x: chip-touch.mouse-x;
+        property <length> cursor-y: chip-touch.mouse-y;
+        property <color> cursor-color: root.selected ? #4c9dff24 : #4c9dff16;
+        background: @radial-gradient(
+            circle 72px at cursor-x cursor-y,
+            cursor-color 0%,
+            #00000000 100%
+        );
+        opacity: chip-touch.has-hover ? 1 : 0;
+        animate opacity { duration: 160ms; easing: ease-out; }
     }
 
     if root.icon != "": Text {
@@ -211,7 +225,7 @@ export component QuietChip inherits Rectangle {
             return reject;
         }
 
-        TouchArea {
+        chip-touch := TouchArea {
             enabled: root.enabled;
             clicked => { root.activated(); }
         }
@@ -246,6 +260,7 @@ export component RouteNodeRow inherits Rectangle {
     border-color: row-focus.has-focus ? Theme.focus : root.selected ? #4c9dff59 : #ffffff12;
     border-width: row-focus.has-focus ? Theme.focus-width : 1px;
     border-radius: 14px;
+    clip: true;
     accessible-role: button;
     accessible-label: root.state-label;
     accessible-enabled: root.enabled;
@@ -253,6 +268,19 @@ export component RouteNodeRow inherits Rectangle {
         if (root.enabled) {
             root.activated();
         }
+    }
+
+    row-cursor-wash := Rectangle {
+        property <length> cursor-x: row-touch.mouse-x;
+        property <length> cursor-y: row-touch.mouse-y;
+        property <color> cursor-color: root.selected ? #4c9dff20 : #4c9dff12;
+        background: @radial-gradient(
+            circle 140px at cursor-x cursor-y,
+            cursor-color 0%,
+            #00000000 100%
+        );
+        opacity: row-touch.has-hover ? 1 : 0;
+        animate opacity { duration: 180ms; easing: ease-out; }
     }
 
     Rectangle {
@@ -348,7 +376,7 @@ export component RouteNodeRow inherits Rectangle {
             return reject;
         }
 
-        TouchArea {
+        row-touch := TouchArea {
             enabled: root.enabled;
             clicked => { root.activated(); }
         }

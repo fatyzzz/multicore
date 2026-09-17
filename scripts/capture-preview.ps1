@@ -8,8 +8,9 @@ param(
     [Parameter(Mandatory = $true)]
     [int]$Height,
     [Parameter(Mandatory = $true)]
-    [ValidateSet("empty", "ready", "connected", "populated-catalog", "announcement", "error", "selection-pending", "diagnostics", "settings")]
+    [ValidateSet("empty", "ready", "connected", "glow-hover", "populated-catalog", "announcement", "error", "selection-pending", "diagnostics", "settings")]
     [string]$ExpectedState,
+    [switch]$HoverConnection,
     [switch]$SelectSecondRoute,
     [switch]$OpenDiagnostics,
     [switch]$OpenSettings
@@ -44,11 +45,45 @@ public static class PreviewWindow {
     [DllImport("user32.dll")]
     private static extern bool PostMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
 
+    [StructLayout(LayoutKind.Sequential)]
+    public struct Point {
+        public int X;
+        public int Y;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool ClientToScreen(IntPtr window, ref Point point);
+
+    [DllImport("user32.dll")]
+    private static extern bool GetCursorPos(out Point point);
+
+    [DllImport("user32.dll")]
+    private static extern bool SetCursorPos(int x, int y);
+
     public static void ClickClient(IntPtr window, int x, int y) {
         IntPtr position = (IntPtr)((y << 16) | (x & 0xffff));
         PostMessage(window, 0x0200, IntPtr.Zero, position);
         PostMessage(window, 0x0201, (IntPtr)1, position);
         PostMessage(window, 0x0202, IntPtr.Zero, position);
+    }
+
+    public static void MoveClient(IntPtr window, int x, int y) {
+        Point screen = new Point { X = x, Y = y };
+        ClientToScreen(window, ref screen);
+        SetCursorPos(screen.X, screen.Y);
+        IntPtr position = (IntPtr)((y << 16) | (x & 0xffff));
+        PostMessage(window, 0x0200, IntPtr.Zero, position);
+        PostMessage(window, 0x02A1, IntPtr.Zero, position);
+    }
+
+    public static Point GetCursorPosition() {
+        Point point;
+        GetCursorPos(out point);
+        return point;
+    }
+
+    public static void RestoreCursor(Point point) {
+        SetCursorPos(point.X, point.Y);
     }
 
     [DllImport("user32.dll", SetLastError = true)]
@@ -86,6 +121,11 @@ function Set-PreviewSize([IntPtr]$Handle) {
 function Click-Preview([IntPtr]$Handle, [int]$ClientX, [int]$ClientY) {
     [PreviewWindow]::ClickClient($Handle, $ClientX, $ClientY)
     Start-Sleep -Milliseconds 350
+}
+
+function Move-Preview([IntPtr]$Handle, [int]$ClientX, [int]$ClientY) {
+    [PreviewWindow]::MoveClient($Handle, $ClientX, $ClientY)
+    Start-Sleep -Milliseconds 450
 }
 
 function Test-ColorNear(
@@ -298,17 +338,27 @@ function Save-Preview([IntPtr]$Handle) {
     throw "Preview frame validation failed after 20 attempts for $ExpectedState`: $lastFailure"
 }
 
-$handle = Get-PreviewWindow
-# A non-zero HWND can be published before Slint's first frame and async refresh.
-Start-Sleep -Seconds 2
-Set-PreviewSize $handle
-if ($SelectSecondRoute) {
-    Click-Preview $handle ([Math]::Floor(($Width + 176) / 2)) 420
+$originalCursor = [PreviewWindow]::GetCursorPosition()
+try {
+    $handle = Get-PreviewWindow
+    # A non-zero HWND can be published before Slint's first frame and async refresh.
+    Start-Sleep -Seconds 2
+    Set-PreviewSize $handle
+    if ($HoverConnection) {
+        Move-Preview $handle 395 112
+        Click-Preview $handle 395 112
+        Move-Preview $handle 395 112
+    }
+    if ($SelectSecondRoute) {
+        Click-Preview $handle ([Math]::Floor(($Width + 176) / 2)) 420
+    }
+    if ($OpenDiagnostics) {
+        Click-Preview $handle 88 122
+    }
+    if ($OpenSettings) {
+        Click-Preview $handle 88 174
+    }
+    Save-Preview $handle
+} finally {
+    [PreviewWindow]::RestoreCursor($originalCursor)
 }
-if ($OpenDiagnostics) {
-    Click-Preview $handle 88 122
-}
-if ($OpenSettings) {
-    Click-Preview $handle 88 174
-}
-Save-Preview $handle

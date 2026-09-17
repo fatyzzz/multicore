@@ -2328,7 +2328,7 @@ mod tests {
         assert!(main.contains("ui.window().is_visible()"));
         assert!(main.contains("if current.latency.queued"));
         assert!(app.contains("trailing-tone: node.latency-tone;"));
-        assert!(app.matches("background: #ffffff05;").count() >= 4);
+        assert!(!app.contains("Local signal grid: structural guides"));
         assert!(app.contains("height: 54px;"));
         assert!(app.contains("border-color: root.status-tone == \"success\""));
         assert!(include_str!("../ui/components.slint").contains("width: 76px;"));
@@ -3756,6 +3756,16 @@ mod tests {
         assert!(source.contains("if root.has-service-logo: Image"));
         assert!(source.contains("if !root.has-service-logo: Image"));
         assert!(source.contains("@image-url(\"../assets/power.svg\")"));
+        assert!(source.contains("signal-mesh-field := Rectangle"));
+        assert!(source.contains("power-touch.mouse-x"));
+        assert!(source.contains("power-touch.mouse-y"));
+        assert!(source.contains("power-touch.has-hover"));
+        assert!(source.contains("@radial-gradient("));
+        assert!(source.contains("circle 108px at cursor-x cursor-y"));
+        assert!(source.contains("for _[grid-x] in 28"));
+        assert!(source.contains("for _[grid-y] in 13"));
+        assert!(!source.contains("Local signal grid: structural guides"));
+        assert!(!source.contains("background: #ffffff05;"));
         assert!(source.contains("subscription-announcement-text"));
         assert!(source.contains("subscription-announcement-tone"));
         for semantic_icon in [
@@ -3861,8 +3871,6 @@ mod tests {
             "text: \"ГОТОВО\";",
             "traffic-chart",
             "fake-metric",
-            "gradient",
-            "glow",
             "if root.visible-page == \"routes\"",
             "label: \"Все маршруты\"",
         ] {
@@ -4160,12 +4168,16 @@ mod tests {
         }
         assert!(!theme.contains("type-icon-size"));
         let visual_sources = format!("{theme}\n{components}");
-        for rejected in ["999px", "gradient", "blur", "glow", "shadow"] {
+        for rejected in ["999px", "blur", "shadow"] {
             assert!(
                 !visual_sources.to_ascii_lowercase().contains(rejected),
                 "rejected visual effect or radius remains: {rejected}"
             );
         }
+        assert!(components.contains("chip-cursor-wash := Rectangle"));
+        assert!(components.contains("row-cursor-wash := Rectangle"));
+        assert!(components.contains("chip-touch.mouse-x"));
+        assert!(components.contains("row-touch.mouse-x"));
         for legacy in ["StatePill", "GlowCard", "NavigationRow", "OverlayPanel"] {
             assert!(
                 !components.contains(legacy),
@@ -4263,6 +4275,8 @@ mod tests {
 
         let capture_runner = include_str!("../../../scripts/run-preview-capture.ps1");
         assert!(capture_runner.contains("$captureFileNames = @("));
+        assert!(capture_runner.contains("Name = \"glow-hover\""));
+        assert!(capture_runner.contains("-HoverConnection"));
         assert!(capture_runner.contains("Remove-Item -LiteralPath $captureFile -Force"));
         assert!(!capture_runner.contains("Get-ChildItem -LiteralPath $outputPath -Filter"));
         assert!(capture_runner.contains("$allowedOutputRoot"));
@@ -4291,6 +4305,8 @@ mod tests {
             .and_then(|source| source.split("function Test-ColorNear").next())
             .expect("Click-Preview helper");
         assert!(capture_helper.contains("public static void ClickClient"));
+        assert!(capture_helper.contains("public static void MoveClient"));
+        assert!(capture_helper.contains("if ($HoverConnection)"));
         assert!(capture_helper.contains("PostMessage(window, 0x0201"));
         assert!(click_helper.contains("[PreviewWindow]::ClickClient($Handle, $ClientX, $ClientY)"));
         assert!(!capture_helper.contains("mouse_event"));

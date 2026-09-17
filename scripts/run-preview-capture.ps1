@@ -2,7 +2,7 @@ param(
     [string]$OutputDirectory = "artifacts/screenshots",
     [int]$Port = 18787,
     [string]$DesktopExecutablePath,
-    [ValidateSet("empty", "ready", "connected", "populated-catalog", "announcement", "error", "selection-pending", "diagnostics", "settings")]
+    [ValidateSet("empty", "ready", "connected", "glow-hover", "populated-catalog", "announcement", "error", "selection-pending", "diagnostics", "settings")]
     [string[]]$OnlyScenario
 )
 
@@ -57,6 +57,7 @@ $beforeRelated = @(Get-Process -Name "multicore-desktop", "multicore-daemon", "m
 $scenarios = @(
     @{ Name = "empty"; State = "empty"; Width = 700; Height = 660; SelectionDelay = 0; SelectRoute = $false; OpenDiagnostics = $false; OpenSettings = $false },
     @{ Name = "ready"; State = "ready"; Width = 820; Height = 760; SelectionDelay = 0; SelectRoute = $false; OpenDiagnostics = $false; OpenSettings = $false },
+    @{ Name = "glow-hover"; State = "ready"; Width = 820; Height = 760; SelectionDelay = 0; SelectRoute = $false; OpenDiagnostics = $false; OpenSettings = $false; HoverConnection = $true },
     @{ Name = "connected"; State = "connected"; Width = 900; Height = 760; SelectionDelay = 0; SelectRoute = $false; OpenDiagnostics = $false; OpenSettings = $false },
     @{ Name = "populated-catalog"; State = "ready"; Width = 900; Height = 760; SelectionDelay = 0; SelectRoute = $false; OpenDiagnostics = $false; OpenSettings = $false },
     @{ Name = "announcement"; State = "ready"; Width = 900; Height = 760; SelectionDelay = 0; SelectRoute = $false; OpenDiagnostics = $false; OpenSettings = $false; Announcement = $true },
@@ -114,6 +115,7 @@ foreach ($scenario in $scenarios) {
             "-ExpectedState", $scenario.Name
         )
         if ($scenario.SelectRoute) { $captureArgs += "-SelectSecondRoute" }
+        if ($scenario.ContainsKey("HoverConnection") -and $scenario.HoverConnection) { $captureArgs += "-HoverConnection" }
         if ($scenario.OpenDiagnostics) { $captureArgs += "-OpenDiagnostics" }
         if ($scenario.OpenSettings) { $captureArgs += "-OpenSettings" }
         & powershell.exe @captureArgs
