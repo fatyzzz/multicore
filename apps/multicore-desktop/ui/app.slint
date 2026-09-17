@@ -597,7 +597,7 @@ export component AppWindow inherits Window {
                             padding-top: 12px;
                             padding-bottom: 12px;
                             spacing: 16px;
-                            alignment: center;
+                            alignment: start;
                             if root.has-profile: power-action := FocusScope {
                                 width: 72px;
                                 height: 72px;
@@ -632,44 +632,35 @@ export component AppWindow inherits Window {
                                     border-width: power-action.has-focus ? Theme.focus-width : 1px;
                                     opacity: root.primary-enabled ? 1 : 0.45;
 
-                                    if root.has-service-logo: Image {
-                                        x: 10px;
-                                        y: 10px;
-                                        width: parent.width - 20px;
-                                        height: parent.height - 20px;
-                                        source: root.service-logo;
+                                    power-glyph := Image {
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2 - 1px;
+                                        width: 32px;
+                                        height: 32px;
+                                        source: @image-url("../assets/power.svg");
                                         image-fit: contain;
                                         accessible-role: none;
                                     }
-                                    if root.has-service-logo: Rectangle {
-                                        x: parent.width - 26px;
-                                        y: parent.height - 26px;
-                                        width: 22px;
-                                        height: 22px;
-                                        border-radius: 11px;
+                                    if root.has-service-logo: service-logo-badge := Rectangle {
+                                        x: parent.width - 30px;
+                                        y: parent.height - 30px;
+                                        width: 28px;
+                                        height: 28px;
+                                        border-radius: 14px;
                                         background: #0d0f12e8;
                                         border-color: #ffffff33;
                                         border-width: 1px;
                                         accessible-role: none;
 
                                         Image {
-                                            x: 5px;
-                                            y: 5px;
-                                            width: 12px;
-                                            height: 12px;
-                                            source: @image-url("../assets/power.svg");
-                                            image-fit: contain;
-                                            accessible-role: none;
-                                        }
-                                    }
-                                    if !root.has-service-logo: Image {
-                                        x: (parent.width - 28px) / 2;
-                                        y: (parent.height - 28px) / 2 - 1px;
-                                        width: 28px;
-                                        height: 28px;
-                                        source: @image-url("../assets/power.svg");
+                                            x: 4px;
+                                            y: 4px;
+                                            width: 20px;
+                                            height: 20px;
+                                            source: root.service-logo;
                                         image-fit: contain;
                                         accessible-role: none;
+                                    }
                                     }
                                 }
 
@@ -709,18 +700,19 @@ export component AppWindow inherits Window {
 
                     }
 
-                    Rectangle {
+                    subscription-strip := Rectangle {
                         height: 54px;
                         background: Theme.surface;
                         border-radius: 16px;
                         HorizontalLayout {
                             padding-left: 16px;
-                            padding-right: 12px;
+                            padding-right: 5px;
                             padding-top: 5px;
                             padding-bottom: 5px;
                             spacing: 12px;
-                            VerticalLayout {
-                                spacing: 2px;
+                            subscription-copy := VerticalLayout {
+                                padding-top: 2px;
+                                spacing: 0px;
                                 Text { text: root.subscription-title; color: Theme.text-primary; font-size: Theme.type-label-size; font-weight: Theme.weight-semibold; overflow: elide; }
                                 Text {
                                     text: root.subscription-refresh-error != "" ? root.subscription-refresh-error : root.subscription-usage + " · " + root.subscription-expiry;
@@ -729,7 +721,13 @@ export component AppWindow inherits Window {
                                     overflow: elide;
                                 }
                             }
-                            SmallAction { label: root.subscription-refresh-pending ? "Обновляем…" : "Обновить"; enabled: root.subscription-refresh-enabled && !root.subscription-refresh-pending; activated => { root.refresh-subscription(); } }
+                            subscription-refresh-action := SmallAction {
+                                width: 104px;
+                                border-radius: 11px;
+                                label: root.subscription-refresh-pending ? "Обновляем…" : "Обновить";
+                                enabled: root.subscription-refresh-enabled && !root.subscription-refresh-pending;
+                                activated => { root.refresh-subscription(); }
+                            }
                         }
                     }
 

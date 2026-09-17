@@ -2369,7 +2369,7 @@ mod tests {
             normalized_app
                 .contains("height: 60px;\n                                horizontal-stretch: 1;")
         );
-        assert!(app.contains("if root.has-service-logo: Rectangle"));
+        assert!(app.contains("if root.has-service-logo: service-logo-badge := Rectangle"));
         assert!(app.contains("source: @image-url(\"../assets/power.svg\")"));
 
         let shelf = app
@@ -3753,8 +3753,12 @@ mod tests {
         assert!(source.contains("accessible-label: root.primary-label;"));
         assert!(source.contains("in property <image> service-logo;"));
         assert!(source.contains("in property <bool> has-service-logo: false;"));
-        assert!(source.contains("if root.has-service-logo: Image"));
-        assert!(source.contains("if !root.has-service-logo: Image"));
+        assert!(source.contains("power-glyph := Image"));
+        assert!(source.contains("width: 32px;"));
+        assert!(source.contains("service-logo-badge := Rectangle"));
+        assert!(source.contains("width: 28px;"));
+        assert!(source.contains("source: root.service-logo;"));
+        assert!(!source.contains("if !root.has-service-logo: Image"));
         assert!(source.contains("@image-url(\"../assets/power.svg\")"));
         assert!(source.contains("signal-mesh-field := Rectangle"));
         assert!(source.contains("strip-glow-touch := TouchArea"));
@@ -3763,6 +3767,8 @@ mod tests {
             .nth(1)
             .and_then(|source| source.split("height: 54px;").next())
             .expect("connection strip source");
+        assert!(connection_strip.contains("alignment: start;"));
+        assert!(!connection_strip.contains("alignment: center;"));
         assert!(
             connection_strip
                 .find("signal-mesh-field := Rectangle")
@@ -3798,6 +3804,25 @@ mod tests {
         assert!(connection_strip.contains("if (root.primary-enabled)"));
         assert!(connection_strip.contains("root.primary-action();"));
         assert!(connection_strip.contains("strip-glow-touch.pressed"));
+        assert!(source.contains("subscription-refresh-action := SmallAction"));
+        assert!(source.contains("width: 104px;"));
+        let subscription_strip = source
+            .split("subscription-strip := Rectangle")
+            .nth(1)
+            .and_then(|source| {
+                source
+                    .split("if root.subscription-announcement-text")
+                    .next()
+            })
+            .expect("subscription strip source");
+        assert!(subscription_strip.contains("border-radius: 16px;"));
+        assert!(subscription_strip.contains("padding-right: 5px;"));
+        assert!(subscription_strip.contains("padding-top: 5px;"));
+        assert!(subscription_strip.contains("padding-bottom: 5px;"));
+        assert!(subscription_strip.contains("subscription-copy := VerticalLayout"));
+        assert!(subscription_strip.contains("padding-top: 2px;"));
+        assert!(subscription_strip.contains("spacing: 0px;"));
+        assert!(subscription_strip.contains("border-radius: 11px;"));
         assert!(pill_mesh.contains("opacity: self.active ? 1 : 0;"));
         assert!(!pill_mesh.contains("opacity: self.active ? 1 : 0.1;"));
         assert!(!source.contains("cursor-glow-field := Rectangle"));
