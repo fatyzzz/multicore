@@ -88,6 +88,10 @@ impl PersistenceTracker {
         self.desired = next;
     }
 
+    fn set_ambient_background(&mut self, enabled: bool) {
+        self.desired.ambient_background = enabled;
+    }
+
     fn observe(&mut self, observation: Option<WindowObservation>) -> Option<AppPreferences> {
         let Some(observation) = observation else {
             self.candidate = None;
@@ -139,6 +143,37 @@ fn visible_page_from_name(page: &str) -> Option<VisiblePage> {
         "settings" => Some(VisiblePage::Settings),
         _ => None,
     }
+}
+
+fn reduced_motion_from_client_area_animation(enabled: Option<bool>) -> bool {
+    matches!(enabled, Some(false))
+}
+
+#[cfg(windows)]
+fn client_area_animation_enabled() -> Option<bool> {
+    const SPI_GETCLIENTAREAANIMATION: u32 = 0x1042;
+
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn SystemParametersInfoW(
+            action: u32,
+            parameter: u32,
+            value: *mut core::ffi::c_void,
+            update: u32,
+        ) -> i32;
+    }
+
+    let mut enabled = 1_i32;
+    // SAFETY: SPI_GETCLIENTAREAANIMATION writes one BOOL into the valid `enabled` pointer.
+    let succeeded = unsafe {
+        SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, (&raw mut enabled).cast(), 0)
+    } != 0;
+    succeeded.then_some(enabled != 0)
+}
+
+#[cfg(not(windows))]
+fn client_area_animation_enabled() -> Option<bool> {
+    None
 }
 
 const PREFERENCE_SAVE_ERROR_RU: &str = "Не удалось сохранить настройки.";
@@ -313,6 +348,10 @@ fn main() -> Result<(), slint::PlatformError> {
     }
     apply_snapshot(&ui, &snapshot(&model.lock().expect("view model lock")));
     ui.set_local_page(visible_page_name(&loaded_preferences.visible_page).into());
+    ui.set_ambient_background_enabled(loaded_preferences.ambient_background);
+    ui.set_reduced_motion(reduced_motion_from_client_area_animation(
+        client_area_animation_enabled(),
+    ));
     if let Some(subscription_url) = launch_arguments.subscription_url {
         ui.set_local_page("settings".into());
         ui.set_subscription_draft(subscription_url.into());
@@ -364,7 +403,9 @@ fn main() -> Result<(), slint::PlatformError> {
         run_update_check(ui.as_weak(), model.clone(), update_state);
     }
     run_refresh(ui.as_weak(), model);
-    if initial_window_visible(launch_mode, tray_runtime.is_some()) {
+    let starts_visible = initial_window_visible(launch_mode, tray_runtime.is_some());
+    ui.set_shell_active(starts_visible);
+    if starts_visible {
         ui.show()?;
     }
     let result = slint::run_event_loop();
@@ -421,6 +462,7 @@ fn wire_external_activations(
 }
 
 fn restore_and_focus(ui: &AppWindow) {
+    ui.set_shell_active(true);
     ui.window().set_minimized(false);
     let _ = ui.show();
     let _ = ui.window().with_winit_window(|window| {
@@ -784,6 +826,7 @@ fn flush_preferences(
     let observation = observe_window(ui);
     let preferences = {
         let mut tracker = tracker.lock().expect("preference tracker lock");
+        tracker.set_ambient_background(ui.get_ambient_background_enabled());
         tracker.snapshot_for_flush(observation.as_ref())
     };
     let saved = writer
@@ -828,10 +871,11 @@ fn wire_preference_persistence(
             &tracker,
         );
         let observation = observe_window(&ui);
-        let preferences = tracker
-            .lock()
-            .expect("preference tracker lock")
-            .observe(observation);
+        let preferences = {
+            let mut tracker = tracker.lock().expect("preference tracker lock");
+            tracker.set_ambient_background(ui.get_ambient_background_enabled());
+            tracker.observe(observation)
+        };
         if let Some(preferences) = preferences {
             writer
                 .lock()
@@ -936,11 +980,13 @@ fn wire_window_controls(ui: &AppWindow, tray_available: bool) {
     ui.on_window_minimize(move || match minimize_disposition(tray_available) {
         MinimizeDisposition::HideToTray => {
             if let Some(ui) = weak.upgrade() {
+                ui.set_shell_active(false);
                 let _ = ui.hide();
             }
         }
         MinimizeDisposition::MinimizeToTaskbar => {
             if let Some(ui) = weak.upgrade() {
+                ui.set_shell_active(false);
                 ui.window().set_minimized(true);
             }
         }
@@ -987,6 +1033,7 @@ fn close_window(weak: &slint::Weak<AppWindow>, tray_available: bool) {
     match close_disposition(tray_available, smoke_close_requested()) {
         CloseDisposition::HideToTray => {
             if let Some(ui) = weak.upgrade() {
+                ui.set_shell_active(false);
                 let _ = ui.hide();
             }
         }
@@ -1040,6 +1087,7 @@ fn handle_tray_command(
     };
     match command {
         TrayCommand::ShowWindow => {
+            ui.set_shell_active(true);
             ui.window().set_minimized(false);
             let _ = ui.show();
             let _ = ui.window().with_winit_window(|window| {
@@ -1805,8 +1853,8 @@ mod window_tests {
         PersistenceTracker, PreferenceWriter, WindowObservation, WriterCommand, WriterResult,
         activation_for_launch_arguments, drain_latest_write, initial_window_visible,
         next_maximized, parse_launch_arguments, preference_error_for_result,
-        retry_delay_after_failure, runtime_allows_update, scale_factor_milli,
-        visible_page_from_name, visible_page_name,
+        reduced_motion_from_client_area_animation, retry_delay_after_failure,
+        runtime_allows_update, scale_factor_milli, visible_page_from_name, visible_page_name,
     };
     use crate::preferences::{AppPreferences, PreferenceStore, VisiblePage, WindowBounds};
     use crate::single_instance::Activation;
@@ -1820,6 +1868,38 @@ mod window_tests {
     fn maximize_toggle_inverts_current_window_state() {
         assert!(next_maximized(false));
         assert!(!next_maximized(true));
+    }
+
+    #[test]
+    fn windows_client_animation_preference_has_a_safe_testable_mapping() {
+        assert!(!reduced_motion_from_client_area_animation(Some(true)));
+        assert!(reduced_motion_from_client_area_animation(Some(false)));
+        assert!(!reduced_motion_from_client_area_animation(None));
+
+        let source = include_str!("main.rs");
+        assert!(source.contains("SPI_GETCLIENTAREAANIMATION"));
+        assert!(source.contains("client_area_animation_enabled()"));
+        assert!(source.contains("ui.set_reduced_motion("));
+    }
+
+    #[test]
+    fn ambient_preference_and_shell_visibility_are_wired_to_native_lifecycle() {
+        let mut tracker = PersistenceTracker::new(AppPreferences::default());
+        tracker.set_ambient_background(false);
+        assert!(!tracker.latest_desired().ambient_background);
+
+        let source = include_str!("main.rs");
+        assert!(
+            source.contains(
+                "ui.set_ambient_background_enabled(loaded_preferences.ambient_background)"
+            )
+        );
+        assert!(
+            source.contains("tracker.set_ambient_background(ui.get_ambient_background_enabled())")
+        );
+        assert!(source.contains("ui.set_shell_active(starts_visible)"));
+        assert!(source.matches("ui.set_shell_active(false)").count() >= 2);
+        assert!(source.matches("ui.set_shell_active(true)").count() >= 2);
     }
 
     #[test]

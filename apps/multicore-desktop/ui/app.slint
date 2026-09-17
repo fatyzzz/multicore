@@ -385,6 +385,11 @@ export component AppWindow inherits Window {
     in property <bool> launch-at-sign-in-stale: false;
     in property <string> launch-at-sign-in-error;
     in property <string> preference-error;
+    in-out property <bool> ambient-background-enabled: true;
+    in-out property <bool> shell-active: true;
+    in property <bool> reduced-motion: false;
+    private property <bool> ambient-wave-phase: false;
+    private property <bool> ambient-motion-active: root.ambient-background-enabled && root.shell-active && !root.reduced-motion && root.visible-page == "home";
     in-out property <bool> replace-editor-open: false;
     in-out property <int> import-success-serial: 0;
     in property <bool> update-available: false;
@@ -417,6 +422,12 @@ export component AppWindow inherits Window {
     callback window-toggle-maximize();
     callback window-close();
     callback update-action();
+
+    wave-timer := Timer {
+        interval: 12s;
+        running: root.ambient-background-enabled && root.shell-active && !root.reduced-motion && !root.minimized && root.visible-page == "home";
+        triggered => { root.ambient-wave-phase = !root.ambient-wave-phase; }
+    }
 
     changed import-success-serial => {
         if (root.import-success-serial > 0) {
@@ -522,6 +533,38 @@ export component AppWindow inherits Window {
 
             if root.visible-page == "home": Rectangle {
                 background: transparent;
+                clip: true;
+
+                ambient-wave-a := Path {
+                    visible: root.ambient-background-enabled;
+                    x: root.ambient-motion-active && root.ambient-wave-phase ? -30px : -38px;
+                    y: root.ambient-motion-active && root.ambient-wave-phase ? 74px : 68px;
+                    width: parent.width + 76px;
+                    height: 210px;
+                    viewbox-width: 1000;
+                    viewbox-height: 220;
+                    commands: "M 0 124 C 160 40 340 36 500 112 C 668 192 824 184 1000 82 L 1000 220 L 0 220 Z";
+                    fill: #c8cdd5;
+                    opacity: 0.02;
+                    animate x { duration: 12s; easing: ease-in-out; }
+                    animate y { duration: 12s; easing: ease-in-out; }
+                }
+
+                ambient-wave-b := Path {
+                    visible: root.ambient-background-enabled;
+                    x: root.ambient-motion-active && root.ambient-wave-phase ? -46px : -38px;
+                    y: root.ambient-motion-active && root.ambient-wave-phase ? 266px : 272px;
+                    width: parent.width + 76px;
+                    height: 240px;
+                    viewbox-width: 1000;
+                    viewbox-height: 240;
+                    commands: "M 0 74 C 190 174 350 184 510 92 C 670 0 824 34 1000 142 L 1000 240 L 0 240 Z";
+                    fill: #aeb5bf;
+                    opacity: 0.03;
+                    animate x { duration: 18s; easing: ease-in-out; }
+                    animate y { duration: 18s; easing: ease-in-out; }
+                }
+
                 VerticalLayout {
                     padding: 20px;
                     spacing: 10px;
@@ -932,6 +975,12 @@ export component AppWindow inherits Window {
                         toggled(value) => { root.set-launch-at-sign-in(value); }
                     }
                     if root.launch-at-sign-in-error != "": Text { height: 34px; text: root.launch-at-sign-in-error; color: Theme.error; font-size: Theme.type-metadata-size; wrap: word-wrap; }
+                    ToggleRow {
+                        label: "Живой фон";
+                        description: root.reduced-motion ? "Анимация отключена настройками Windows" : "Спокойные волны на главной";
+                        checked: root.ambient-background-enabled;
+                        toggled(value) => { root.ambient-background-enabled = value; }
+                    }
                     if root.preference-error != "": Text { height: 34px; text: root.preference-error; color: Theme.error; font-size: Theme.type-metadata-size; wrap: word-wrap; }
                     Rectangle { height: 1px; background: Theme.line; }
                     HorizontalLayout {
@@ -984,6 +1033,14 @@ export component AppWindow inherits Window {
             }
             }
         }
+        }
+    }
+
+    // A taskbar restore has no application callback; the native minimized property
+    // supplies the matching resume edge without waking a tray-hidden window.
+    changed minimized => {
+        if (!root.minimized) {
+            root.shell-active = true;
         }
     }
 

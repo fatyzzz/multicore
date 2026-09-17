@@ -3728,6 +3728,46 @@ mod tests {
     }
 
     #[test]
+    fn home_background_is_bounded_pausable_and_non_interactive() {
+        let source = include_str!("../ui/app.slint");
+
+        for required in [
+            "in-out property <bool> ambient-background-enabled",
+            "in-out property <bool> shell-active",
+            "in property <bool> reduced-motion",
+            "wave-timer := Timer",
+            "running: root.ambient-background-enabled && root.shell-active && !root.reduced-motion",
+            "interval: 12s",
+            "opacity: 0.02",
+            "opacity: 0.03",
+            "duration: 12s",
+            "duration: 18s",
+        ] {
+            assert!(
+                source.contains(required),
+                "missing ambient contract: {required}"
+            );
+        }
+
+        assert_eq!(source.matches("ambient-wave-a := Path").count(), 1);
+        assert_eq!(source.matches("ambient-wave-b := Path").count(), 1);
+        assert!(!source.to_ascii_lowercase().contains("scanline"));
+        assert!(!source.to_ascii_lowercase().contains("particle"));
+
+        let first_wave = source
+            .find("ambient-wave-a :=")
+            .expect("first ambient wave marker");
+        let home_content = source[first_wave..]
+            .find("VerticalLayout {")
+            .map(|offset| first_wave + offset)
+            .expect("home content follows ambient waves");
+        let wave_layer = &source[first_wave..home_content];
+        assert!(source[first_wave.saturating_sub(80)..first_wave].contains("clip: true"));
+        assert!(!wave_layer.contains("TouchArea"));
+        assert!(!wave_layer.contains("blur"));
+    }
+
+    #[test]
     fn desktop_control_center_source_contract() {
         let source = include_str!("../ui/app.slint");
         let components = include_str!("../ui/components.slint");
