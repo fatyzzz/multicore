@@ -151,7 +151,7 @@ try {
     $utf8NoBom = [Text.UTF8Encoding]::new($false)
     [IO.File]::WriteAllText(
         (Join-Path $mutableRoot 'preferences.json'),
-        "{`n  `"schema_version`": 1,`n  `"launch_on_startup`": false,`n  `"theme`": `"system`"`n}`n",
+        "{`n  `"schema_version`": 1,`n  `"restored_bounds`": {`"x`":40,`"y`":60,`"width`":920,`"height`":700},`n  `"maximized`": true,`n  `"visible_page`": `"status`",`n  `"active_profile_hint`": `"profile-smoke`",`n  `"last_group_by_profile`": {`"profile-smoke`":`"proxy-group`"},`n  `"selections_by_profile`": {`"profile-smoke`":{`"proxy-group`":`"node-smoke`"}},`n  `"ambient_background`": true`n}`n",
         $utf8NoBom)
     [IO.File]::WriteAllText(
         (Join-Path $mutableRoot 'profiles\index.json'),
@@ -163,7 +163,7 @@ try {
         $utf8NoBom)
     [IO.File]::WriteAllText(
         (Join-Path $profileGeneration 'selections.json'),
-        "{`n  `"schema_version`": 1,`n  `"revision`": 1,`n  `"selections`": {`"proxy-group`": `"node-smoke`"}`n}`n",
+        "{`n  `"schema_version`": 1,`n  `"catalog_revision`": 73,`n  `"selections`": {`"proxy-group`": `"node-smoke`"}`n}`n",
         $utf8NoBom)
     [IO.File]::WriteAllText(
         (Join-Path $mutableRoot 'device-identity'),
@@ -216,9 +216,25 @@ function Assert-State {
 
 $root = Join-Path ([Environment]::GetEnvironmentVariable('LOCALAPPDATA', 'Process')) 'MultiCore'
 $preferences = Get-Content -Raw -LiteralPath (Join-Path $root 'preferences.json') | ConvertFrom-Json
+$preferenceKeys = @($preferences.PSObject.Properties.Name | Sort-Object)
+Assert-State (($preferenceKeys -join ',') -ceq 'active_profile_hint,ambient_background,last_group_by_profile,maximized,restored_bounds,schema_version,selections_by_profile,visible_page') 'unexpected preferences fields'
 Assert-State ($preferences.schema_version -eq 1) 'unexpected preferences schema'
-Assert-State ($preferences.launch_on_startup -eq $false) 'unexpected startup preference'
-Assert-State ($preferences.theme -ceq 'system') 'unexpected theme preference'
+Assert-State ($preferences.schema_version -is [int]) 'preferences schema must be an integer'
+$restoredBoundsKeys = @($preferences.restored_bounds.PSObject.Properties.Name | Sort-Object)
+Assert-State (($restoredBoundsKeys -join ',') -ceq 'height,width,x,y') 'unexpected restored-bounds fields'
+Assert-State ($preferences.restored_bounds.x -eq 40 -and $preferences.restored_bounds.x -is [int]) 'unexpected restored x bound'
+Assert-State ($preferences.restored_bounds.y -eq 60 -and $preferences.restored_bounds.y -is [int]) 'unexpected restored y bound'
+Assert-State ($preferences.restored_bounds.width -eq 920 -and $preferences.restored_bounds.width -is [int]) 'unexpected restored width'
+Assert-State ($preferences.restored_bounds.height -eq 700 -and $preferences.restored_bounds.height -is [int]) 'unexpected restored height'
+Assert-State ($preferences.maximized -is [bool] -and $preferences.maximized) 'unexpected maximized preference'
+Assert-State ($preferences.visible_page -is [string] -and $preferences.visible_page -ceq 'status') 'unexpected visible page'
+Assert-State ($preferences.active_profile_hint -is [string] -and $preferences.active_profile_hint -ceq 'profile-smoke') 'unexpected active profile hint'
+Assert-State (@($preferences.last_group_by_profile.PSObject.Properties).Count -eq 1) 'unexpected last-group profile count'
+Assert-State ($preferences.last_group_by_profile.'profile-smoke' -is [string] -and $preferences.last_group_by_profile.'profile-smoke' -ceq 'proxy-group') 'unexpected last group ID'
+Assert-State (@($preferences.selections_by_profile.PSObject.Properties).Count -eq 1) 'unexpected selection profile count'
+Assert-State (@($preferences.selections_by_profile.'profile-smoke'.PSObject.Properties).Count -eq 1) 'unexpected preference selection count'
+Assert-State ($preferences.selections_by_profile.'profile-smoke'.'proxy-group' -is [string] -and $preferences.selections_by_profile.'profile-smoke'.'proxy-group' -ceq 'node-smoke') 'unexpected preference selected node ID'
+Assert-State ($preferences.ambient_background -is [bool] -and $preferences.ambient_background) 'unexpected ambient background preference'
 
 $index = Get-Content -Raw -LiteralPath (Join-Path $root 'profiles\index.json') | ConvertFrom-Json
 Assert-State ($index.schema_version -eq 1) 'unexpected profiles schema'
@@ -234,9 +250,12 @@ Assert-State ($subscription.source_url -ceq 'https://sentinel.invalid/private-to
 Assert-State ($subscription.info.source_host -ceq 'sentinel.invalid') 'subscription host changed'
 Assert-State ([long]$subscription.info.updated_at_unix -eq 1757959200) 'subscription timestamp changed'
 $selections = Get-Content -Raw -LiteralPath (Join-Path $generation 'selections.json') | ConvertFrom-Json
+Assert-State ((@($selections.PSObject.Properties.Name | Sort-Object) -join ',') -ceq 'catalog_revision,schema_version,selections') 'unexpected selections fields'
 Assert-State ($selections.schema_version -eq 1) 'unexpected selections schema'
-Assert-State ([long]$selections.revision -eq 1) 'unexpected selections revision'
-Assert-State ($selections.selections.'proxy-group' -ceq 'node-smoke') 'selected node changed'
+Assert-State ($selections.schema_version -is [int]) 'selections schema must be an integer'
+Assert-State ($selections.catalog_revision -eq 73 -and $selections.catalog_revision -is [int]) 'unexpected catalog revision'
+Assert-State (@($selections.selections.PSObject.Properties).Count -eq 1) 'unexpected persisted selection count'
+Assert-State ($selections.selections.'proxy-group' -is [string] -and $selections.selections.'proxy-group' -ceq 'node-smoke') 'selected node changed'
 Assert-State (([IO.File]::ReadAllText((Join-Path $root 'device-identity'))) -ceq "multicore-smoke-device-00000001`n") 'device identity changed'
 Assert-State (([IO.File]::ReadAllText((Join-Path $root 'logs\latest-core.log'))) -ceq "2025-09-15T12:00:00Z INFO smoke sentinel log line`n") 'core log changed'
 
