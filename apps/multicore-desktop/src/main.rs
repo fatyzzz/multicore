@@ -424,10 +424,7 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.show()?;
     }
     let result = slint::run_event_loop();
-    preference_writer
-        .lock()
-        .expect("preference writer lock")
-        .stop();
+    flush_preferences(&ui, &preference_writer, &preference_tracker);
     let _ = ui.hide();
     drop(tray_runtime);
     result
@@ -1941,6 +1938,50 @@ mod window_tests {
         assert!(source.contains("ui.set_shell_active(starts_visible)"));
         assert!(source.matches("ui.set_shell_active(false)").count() >= 2);
         assert!(source.matches("ui.set_shell_active(true)").count() >= 2);
+    }
+
+    #[test]
+    fn final_event_loop_exit_flushes_immediate_ambient_changes() {
+        let mut tracker = PersistenceTracker::new(AppPreferences::default());
+        tracker.set_ambient_background(false);
+        let final_snapshot = tracker.snapshot_for_flush(None);
+        assert!(!final_snapshot.ambient_background);
+
+        let source = include_str!("main.rs");
+        let shutdown = source
+            .split("let result = slint::run_event_loop();")
+            .nth(1)
+            .and_then(|source| source.split("fn activation_for_launch_arguments").next())
+            .expect("common post-event-loop shutdown");
+        assert!(
+            shutdown.contains("flush_preferences(&ui, &preference_writer, &preference_tracker);")
+        );
+        assert!(shutdown.find("flush_preferences").unwrap() < shutdown.find("ui.hide()").unwrap());
+        assert!(!shutdown.contains(".stop();"));
+
+        let updater_exit = source
+            .split("fn wire_updater(")
+            .nth(1)
+            .and_then(|source| source.split("fn run_update_check").next())
+            .expect("updater wiring");
+        assert!(updater_exit.contains("slint::quit_event_loop()"));
+    }
+
+    #[test]
+    fn final_flush_can_replace_an_earlier_tray_flush_after_writer_shutdown() {
+        let root = tempfile::tempdir().unwrap();
+        let store = PreferenceStore::at(root.path().join("preferences.json"));
+        let mut writer = PreferenceWriter::start(Some(store.clone()));
+        let tray_snapshot = AppPreferences::default();
+        assert!(writer.stop_and_flush(&tray_snapshot));
+
+        let final_snapshot = AppPreferences {
+            ambient_background: false,
+            visible_page: VisiblePage::Settings,
+            ..tray_snapshot
+        };
+        assert!(writer.stop_and_flush(&final_snapshot));
+        assert_eq!(store.load().unwrap(), final_snapshot);
     }
 
     #[test]

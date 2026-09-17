@@ -963,9 +963,13 @@ export component AppWindow inherits Window {
 
             if root.visible-page == "settings": Rectangle {
                 background: transparent;
-                VerticalLayout {
-                    padding: 28px;
-                    spacing: 18px;
+                settings-scroll := ScrollView {
+                    vertical-stretch: 1;
+                    settings-content := VerticalLayout {
+                        width: settings-scroll.visible-width;
+                        min-height: settings-scroll.visible-height;
+                        padding: 28px;
+                        spacing: 18px;
                     Text { height: 30px; text: "Настройки"; color: Theme.text-primary; font-size: 20px; font-weight: Theme.weight-semibold; }
                     Text { height: 24px; text: "Windows"; color: Theme.text-primary; font-size: Theme.type-label-size; font-weight: Theme.weight-semibold; }
                     ToggleRow {
@@ -1028,7 +1032,8 @@ export component AppWindow inherits Window {
                         }
                     }
                     Rectangle { vertical-stretch: 1; background: transparent; }
-                    Text { height: 24px; text: "MultiCore · Mihomo 1.19.30 · Xray 26.9.9"; color: Theme.text-muted; font-size: Theme.type-metadata-size; }
+                        Text { height: 24px; text: "MultiCore · Mihomo 1.19.30 · Xray 26.9.9"; color: Theme.text-muted; font-size: Theme.type-metadata-size; }
+                    }
                 }
             }
             }

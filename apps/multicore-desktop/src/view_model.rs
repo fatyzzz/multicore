@@ -3799,6 +3799,30 @@ mod tests {
     }
 
     #[test]
+    fn settings_page_scrolls_at_minimum_height_without_flattening_hierarchy() {
+        let source = include_str!("../ui/app.slint");
+        let settings = source
+            .split("if root.visible-page == \"settings\": Rectangle {")
+            .nth(1)
+            .and_then(|source| source.split("changed minimized =>").next())
+            .expect("settings page block");
+
+        assert!(settings.contains("settings-scroll := ScrollView"));
+        assert!(settings.contains("settings-content := VerticalLayout"));
+        assert!(settings.contains("vertical-stretch: 1;"));
+        assert!(settings.contains("width: settings-scroll.visible-width;"));
+        assert!(settings.contains("min-height: settings-scroll.visible-height;"));
+        assert!(settings.contains("padding: 28px;"));
+        assert!(settings.contains("spacing: 18px;"));
+        assert!(settings.contains("LineEdit { text <=> root.subscription-draft;"));
+        assert!(settings.matches("ToggleRow {").count() >= 2);
+        assert!(
+            settings.find("settings-scroll := ScrollView").unwrap()
+                < settings.find("settings-content := VerticalLayout").unwrap()
+        );
+    }
+
+    #[test]
     fn desktop_control_center_source_contract() {
         let source = include_str!("../ui/app.slint");
         let components = include_str!("../ui/components.slint");
