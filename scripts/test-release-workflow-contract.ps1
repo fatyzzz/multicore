@@ -30,6 +30,7 @@ foreach ($token in @(
     'test-windows-installer-contract.ps1',
     '-DesktopExecutablePath dist/release/multicore-windows-x64/MultiCore.exe',
     '-DaemonExecutablePath dist/release/multicore-windows-x64/runtime/multicore-daemon.exe',
+    '-UpdaterExecutablePath dist/release/multicore-windows-x64/runtime/multicore-updater.exe',
     '-CoreHostExecutablePath dist/release/multicore-windows-x64/runtime/multicore-core-host.exe',
     'build-windows-installer.ps1',
     'smoke-test-windows-installed-update.ps1',

@@ -71,6 +71,7 @@ jobs:
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-windows-elevation-manifest.ps1 `
             -DesktopExecutablePath dist/release/multicore-windows-x64/MultiCore.exe `
             -DaemonExecutablePath dist/release/multicore-windows-x64/runtime/multicore-daemon.exe `
+            -UpdaterExecutablePath dist/release/multicore-windows-x64/runtime/multicore-updater.exe `
             -CoreHostExecutablePath dist/release/multicore-windows-x64/runtime/multicore-core-host.exe
 
       - name: Install pinned Inno Setup
