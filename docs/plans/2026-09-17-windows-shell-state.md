@@ -202,7 +202,7 @@ git commit -m "feat(desktop): define native shell lifecycle rules"
 
 **Does NOT cover:** This task does not persist connected state and does not switch profiles from the tray.
 
-- [ ] **Step 1: Extend source-contract tests before wiring**
+- [x] **Step 1: Extend source-contract tests before wiring**
 
 ```rust
 #[test]
@@ -216,27 +216,27 @@ fn shell_wiring_has_resize_and_preference_flush_boundaries() {
 }
 ```
 
-- [ ] **Step 2: Run the focused test to verify it fails**
+- [x] **Step 2: Run the focused test to verify it fails**
 
 Run: `cargo test -p multicore-desktop window_tests::shell_wiring_has_resize_and_preference_flush_boundaries --locked`
 Expected: FAIL because resize and preference wiring are absent.
 
-- [ ] **Step 3: Restore and observe native placement**
+- [x] **Step 3: Restore and observe native placement**
 
 Before `ui.show()`, load preferences, set `local-page`, apply clamped restored outer position/inner size through `with_winit_window`, and restore maximized state last. Start a 500 ms repeated timer that reads position, inner size, maximized state, and page; write only after a value has remained unchanged for one tick. Never write while minimized or while no native window is available.
 
 Remove the fixed Slint `max-width`/`max-height`. On restore and monitor changes, set Winit's maximum inner size to the current monitor work area while retaining the `700x620` minimum; recompute before starting a native edge drag so moving the window between monitors cannot retain a stale cap.
 
-- [ ] **Step 4: Wire all window callbacks**
+- [x] **Step 4: Wire all window callbacks**
 
 `window-drag` keeps `drag_window()`. `window-resize(edge)` parses the bounded edge name and invokes Winit `drag_resize_window`. `window-minimize` uses `HideToTray` or `set_minimized(true)`. Both title-bar and native close requests use the same close decision. `ShowWindow` restores, shows, focuses, requests redraw, and sets `shell-active = true`. Explicit tray Exit flushes preferences before `quit_event_loop`.
 
-- [ ] **Step 5: Run desktop tests**
+- [x] **Step 5: Run desktop tests**
 
 Run: `cargo test -p multicore-desktop --all-targets --locked`
 Expected: PASS; existing background-start, smoke-close, tray, import, and updater tests remain green.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add apps/multicore-desktop/src/main.rs apps/multicore-desktop/ui/app.slint
@@ -304,7 +304,7 @@ git commit -m "feat(desktop): add pausable ambient home waves"
 
 **Does NOT cover:** Uninstall may remove the installation directory; this assertion concerns in-app updates and requires mutable data to remain outside that directory.
 
-- [ ] **Step 1: Add failing sentinel assertions**
+- [x] **Step 1: Add failing sentinel assertions**
 
 Before invoking the updater, create a test-local `LOCALAPPDATA\MultiCore` containing `preferences.json`, `profiles\index.json`, a profile `subscription.json` with `https://sentinel.invalid/private-token`, `device-identity`, and `logs\latest-core.log`. Hash every sentinel file.
 
@@ -313,7 +313,7 @@ Before invoking the updater, create a test-local `LOCALAPPDATA\MultiCore` contai
 Run: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\smoke-test-windows-installed-update.ps1 -InstallerPath dist\release\MultiCore-Setup-x64.exe -PackagePath dist\multicore-windows-x64`
 Expected: FAIL at the new assertion if the test process does not isolate and preserve its mutable data root.
 
-- [ ] **Step 3: Isolate and verify the mutable root**
+- [x] **Step 3: Isolate and verify the mutable root**
 
 Set `LOCALAPPDATA` only for the helper/update process, keep the update target equal to `$installRoot\current`, and after apply assert all sentinel hashes match. Capture updater stdout/stderr and assert it contains neither `private-token` nor the full subscription URL. Resolve every recursive cleanup target beneath the GUID-named temporary root before removal.
 
@@ -325,7 +325,7 @@ Expected: PASS.
 Run: the installed-update smoke command from Step 2 with current artifacts.
 Expected: PASS with byte-identical mutable sentinels.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add scripts/smoke-test-windows-installed-update.ps1
