@@ -145,24 +145,36 @@ try {
 
     $testLocalAppData = Join-Path $testRoot 'local-app-data'
     $mutableRoot = Join-Path $testLocalAppData 'MultiCore'
-    $profileGeneration = Join-Path $mutableRoot 'profiles\profile-smoke\snapshot-00000000000000000001'
+    $profileId = '11111111-2222-4333-8444-555555555555'
+    $profileRoot = Join-Path $mutableRoot (Join-Path 'profiles' $profileId)
+    $profileGeneration = Join-Path $profileRoot 'generations\snapshot-00000000000000000001'
     New-Item -ItemType Directory -Path $profileGeneration -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $mutableRoot 'logs') -Force | Out-Null
     $utf8NoBom = [Text.UTF8Encoding]::new($false)
+    # This fixture uses the approved multi-sub disk contract. Task 7 must rerun this
+    # artifact smoke against the production ProfileStore after that loader lands.
     [IO.File]::WriteAllText(
         (Join-Path $mutableRoot 'preferences.json'),
-        "{`n  `"schema_version`": 1,`n  `"restored_bounds`": {`"x`":40,`"y`":60,`"width`":920,`"height`":700},`n  `"maximized`": true,`n  `"visible_page`": `"status`",`n  `"active_profile_hint`": `"profile-smoke`",`n  `"last_group_by_profile`": {`"profile-smoke`":`"proxy-group`"},`n  `"selections_by_profile`": {`"profile-smoke`":{`"proxy-group`":`"node-smoke`"}},`n  `"ambient_background`": true`n}`n",
+        "{`n  `"schema_version`": 1,`n  `"restored_bounds`": {`"x`":40,`"y`":60,`"width`":920,`"height`":700},`n  `"maximized`": true,`n  `"visible_page`": `"status`",`n  `"active_profile_hint`": `"$profileId`",`n  `"last_group_by_profile`": {`"$profileId`":`"proxy-group`"},`n  `"selections_by_profile`": {`"$profileId`":{`"proxy-group`":`"node-smoke`"}},`n  `"ambient_background`": true`n}`n",
         $utf8NoBom)
     [IO.File]::WriteAllText(
         (Join-Path $mutableRoot 'profiles\index.json'),
-        "{`n  `"schema_version`": 1,`n  `"active_profile_id`": `"profile-smoke`",`n  `"profiles`": [{`"id`":`"profile-smoke`",`"current_generation`":1}]`n}`n",
+        "{`n  `"schema_version`": 1,`n  `"active_profile_id`": `"$profileId`",`n  `"profiles`": [{`"id`":`"$profileId`",`"created_at_unix`":1757959100}]`n}`n",
+        $utf8NoBom)
+    [IO.File]::WriteAllText(
+        (Join-Path $profileGeneration 'mihomo.yaml'),
+        "proxies:`n  - name: node-smoke`n    type: socks5`n    server: 127.0.0.1`n    port: 1080`nproxy-groups:`n  - name: proxy-group`n    type: select`n    proxies:`n      - node-smoke`nrules:`n  - MATCH,proxy-group`n",
+        $utf8NoBom)
+    [IO.File]::WriteAllText(
+        (Join-Path $profileGeneration 'xray.json'),
+        "{`n  `"log`": {`"loglevel`":`"warning`"},`n  `"outbounds`": []`n}`n",
         $utf8NoBom)
     [IO.File]::WriteAllText(
         (Join-Path $profileGeneration 'subscription.json'),
-        "{`n  `"source_url`": `"https://sentinel.invalid/private-token`",`n  `"info`": {`"source_host`":`"sentinel.invalid`",`"updated_at_unix`":1757959200},`n  `"targets`": {}`n}`n",
+        "{`n  `"source_url`": `"https://sentinel.invalid/private-token`",`n  `"info`": {`n    `"source_host`": `"sentinel.invalid`",`n    `"display_name`": `"Smoke Subscription`",`n    `"uploaded_bytes`": null,`n    `"downloaded_bytes`": 1024,`n    `"total_bytes`": 4096,`n    `"expires_at_unix`": null,`n    `"updated_at_unix`": 1757959200,`n    `"refresh_interval_secs`": 3600,`n    `"announcement_text`": null,`n    `"announcement_action_label`": null,`n    `"announcement_tone`": null`n  },`n  `"targets`": {`n    `"home_url`": null,`n    `"support_url`": null,`n    `"announcement_url`": null,`n    `"logo_url`": null`n  }`n}`n",
         $utf8NoBom)
     [IO.File]::WriteAllText(
-        (Join-Path $profileGeneration 'selections.json'),
+        (Join-Path $profileRoot 'selections.json'),
         "{`n  `"schema_version`": 1,`n  `"catalog_revision`": 73,`n  `"selections`": {`"proxy-group`": `"node-smoke`"}`n}`n",
         $utf8NoBom)
     [IO.File]::WriteAllText(
@@ -174,7 +186,7 @@ try {
         "2025-09-15T12:00:00Z INFO smoke sentinel log line`n",
         $utf8NoBom)
     $mutableManifestBefore = Get-FileHashManifest -Root $mutableRoot
-    Assert-True ($mutableManifestBefore.Count -eq 6) 'mutable data fixture must contain all six sentinel files'
+    Assert-True ($mutableManifestBefore.Count -eq 8) 'mutable data fixture must contain all eight sentinel files'
 
     $updaterStdout = Join-Path $testRoot 'updater-stdout.log'
     $updaterStderr = Join-Path $testRoot 'updater-stderr.log'
@@ -215,6 +227,7 @@ function Assert-State {
 }
 
 $root = Join-Path ([Environment]::GetEnvironmentVariable('LOCALAPPDATA', 'Process')) 'MultiCore'
+$expectedProfileId = '11111111-2222-4333-8444-555555555555'
 $preferences = Get-Content -Raw -LiteralPath (Join-Path $root 'preferences.json') | ConvertFrom-Json
 $preferenceKeys = @($preferences.PSObject.Properties.Name | Sort-Object)
 Assert-State (($preferenceKeys -join ',') -ceq 'active_profile_hint,ambient_background,last_group_by_profile,maximized,restored_bounds,schema_version,selections_by_profile,visible_page') 'unexpected preferences fields'
@@ -228,28 +241,58 @@ Assert-State ($preferences.restored_bounds.width -eq 920 -and $preferences.resto
 Assert-State ($preferences.restored_bounds.height -eq 700 -and $preferences.restored_bounds.height -is [int]) 'unexpected restored height'
 Assert-State ($preferences.maximized -is [bool] -and $preferences.maximized) 'unexpected maximized preference'
 Assert-State ($preferences.visible_page -is [string] -and $preferences.visible_page -ceq 'status') 'unexpected visible page'
-Assert-State ($preferences.active_profile_hint -is [string] -and $preferences.active_profile_hint -ceq 'profile-smoke') 'unexpected active profile hint'
+Assert-State ($preferences.active_profile_hint -is [string] -and $preferences.active_profile_hint -ceq $expectedProfileId) 'unexpected active profile hint'
 Assert-State (@($preferences.last_group_by_profile.PSObject.Properties).Count -eq 1) 'unexpected last-group profile count'
-Assert-State ($preferences.last_group_by_profile.'profile-smoke' -is [string] -and $preferences.last_group_by_profile.'profile-smoke' -ceq 'proxy-group') 'unexpected last group ID'
+Assert-State ($preferences.last_group_by_profile.$expectedProfileId -is [string] -and $preferences.last_group_by_profile.$expectedProfileId -ceq 'proxy-group') 'unexpected last group ID'
 Assert-State (@($preferences.selections_by_profile.PSObject.Properties).Count -eq 1) 'unexpected selection profile count'
-Assert-State (@($preferences.selections_by_profile.'profile-smoke'.PSObject.Properties).Count -eq 1) 'unexpected preference selection count'
-Assert-State ($preferences.selections_by_profile.'profile-smoke'.'proxy-group' -is [string] -and $preferences.selections_by_profile.'profile-smoke'.'proxy-group' -ceq 'node-smoke') 'unexpected preference selected node ID'
+Assert-State (@($preferences.selections_by_profile.$expectedProfileId.PSObject.Properties).Count -eq 1) 'unexpected preference selection count'
+Assert-State ($preferences.selections_by_profile.$expectedProfileId.'proxy-group' -is [string] -and $preferences.selections_by_profile.$expectedProfileId.'proxy-group' -ceq 'node-smoke') 'unexpected preference selected node ID'
 Assert-State ($preferences.ambient_background -is [bool] -and $preferences.ambient_background) 'unexpected ambient background preference'
 
 $index = Get-Content -Raw -LiteralPath (Join-Path $root 'profiles\index.json') | ConvertFrom-Json
+Assert-State ((@($index.PSObject.Properties.Name | Sort-Object) -join ',') -ceq 'active_profile_id,profiles,schema_version') 'unexpected profile index fields'
 Assert-State ($index.schema_version -eq 1) 'unexpected profiles schema'
-Assert-State ($index.active_profile_id -ceq 'profile-smoke') 'unexpected active profile'
-$activeProfile = @($index.profiles | Where-Object { $_.id -ceq $index.active_profile_id })
-Assert-State ($activeProfile.Count -eq 1) 'active profile entry must be unique'
-Assert-State ([long]$activeProfile[0].current_generation -eq 1) 'unexpected active generation'
-$generationName = 'snapshot-{0:D20}' -f [long]$activeProfile[0].current_generation
-$generation = Join-Path $root (Join-Path ('profiles\' + $index.active_profile_id) $generationName)
+Assert-State ($index.schema_version -is [int]) 'profile index schema must be an integer'
+Assert-State ($index.active_profile_id -is [string] -and $index.active_profile_id -ceq $expectedProfileId) 'unexpected active profile'
+Assert-State ($index.profiles -is [array]) 'ordered profiles must be an array'
+Assert-State ($index.profiles.Count -eq 1) 'unexpected ordered profile count'
+$profile = $index.profiles[0]
+Assert-State ((@($profile.PSObject.Properties.Name | Sort-Object) -join ',') -ceq 'created_at_unix,id') 'unexpected profile entry fields'
+Assert-State ($profile.id -is [string] -and $profile.id -ceq $expectedProfileId) 'unexpected ordered profile ID'
+Assert-State ($profile.id -cmatch '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$') 'profile ID must be UUID v4 shaped'
+Assert-State ($profile.created_at_unix -is [int] -and $profile.created_at_unix -eq 1757959100) 'unexpected profile creation timestamp'
+$profileRoot = Join-Path $root (Join-Path 'profiles' $expectedProfileId)
+$generation = Join-Path $profileRoot 'generations\snapshot-00000000000000000001'
+
+$expectedMihomo = "proxies:`n  - name: node-smoke`n    type: socks5`n    server: 127.0.0.1`n    port: 1080`nproxy-groups:`n  - name: proxy-group`n    type: select`n    proxies:`n      - node-smoke`nrules:`n  - MATCH,proxy-group`n"
+Assert-State (([IO.File]::ReadAllText((Join-Path $generation 'mihomo.yaml'))) -ceq $expectedMihomo) 'mihomo generation changed'
+$xray = Get-Content -Raw -LiteralPath (Join-Path $generation 'xray.json') | ConvertFrom-Json
+Assert-State ((@($xray.PSObject.Properties.Name | Sort-Object) -join ',') -ceq 'log,outbounds') 'unexpected Xray fields'
+Assert-State ($xray.log.loglevel -is [string] -and $xray.log.loglevel -ceq 'warning') 'unexpected Xray log level'
+Assert-State (@($xray.outbounds).Count -eq 0) 'unexpected Xray outbounds'
 
 $subscription = Get-Content -Raw -LiteralPath (Join-Path $generation 'subscription.json') | ConvertFrom-Json
-Assert-State ($subscription.source_url -ceq 'https://sentinel.invalid/private-token') 'subscription sentinel changed'
-Assert-State ($subscription.info.source_host -ceq 'sentinel.invalid') 'subscription host changed'
-Assert-State ([long]$subscription.info.updated_at_unix -eq 1757959200) 'subscription timestamp changed'
-$selections = Get-Content -Raw -LiteralPath (Join-Path $generation 'selections.json') | ConvertFrom-Json
+Assert-State ((@($subscription.PSObject.Properties.Name | Sort-Object) -join ',') -ceq 'info,source_url,targets') 'unexpected subscription fields'
+Assert-State ($subscription.source_url -is [string] -and $subscription.source_url -ceq 'https://sentinel.invalid/private-token') 'subscription sentinel changed'
+Assert-State ((@($subscription.info.PSObject.Properties.Name | Sort-Object) -join ',') -ceq 'announcement_action_label,announcement_text,announcement_tone,display_name,downloaded_bytes,expires_at_unix,refresh_interval_secs,source_host,total_bytes,updated_at_unix,uploaded_bytes') 'unexpected subscription info fields'
+Assert-State ($subscription.info.source_host -is [string] -and $subscription.info.source_host -ceq 'sentinel.invalid') 'subscription host changed'
+Assert-State ($subscription.info.display_name -is [string] -and $subscription.info.display_name -ceq 'Smoke Subscription') 'subscription display name changed'
+Assert-State ($null -eq $subscription.info.uploaded_bytes) 'subscription uploaded bytes changed'
+Assert-State ($subscription.info.downloaded_bytes -is [int] -and $subscription.info.downloaded_bytes -eq 1024) 'subscription downloaded bytes changed'
+Assert-State ($subscription.info.total_bytes -is [int] -and $subscription.info.total_bytes -eq 4096) 'subscription total bytes changed'
+Assert-State ($null -eq $subscription.info.expires_at_unix) 'subscription expiry changed'
+Assert-State ($subscription.info.updated_at_unix -is [int] -and $subscription.info.updated_at_unix -eq 1757959200) 'subscription timestamp changed'
+Assert-State ($subscription.info.refresh_interval_secs -is [int] -and $subscription.info.refresh_interval_secs -eq 3600) 'subscription refresh interval changed'
+Assert-State ($null -eq $subscription.info.announcement_text) 'subscription announcement text changed'
+Assert-State ($null -eq $subscription.info.announcement_action_label) 'subscription announcement action changed'
+Assert-State ($null -eq $subscription.info.announcement_tone) 'subscription announcement tone changed'
+Assert-State ((@($subscription.targets.PSObject.Properties.Name | Sort-Object) -join ',') -ceq 'announcement_url,home_url,logo_url,support_url') 'unexpected subscription target fields'
+Assert-State ($null -eq $subscription.targets.home_url) 'subscription home URL changed'
+Assert-State ($null -eq $subscription.targets.support_url) 'subscription support URL changed'
+Assert-State ($null -eq $subscription.targets.announcement_url) 'subscription announcement URL changed'
+Assert-State ($null -eq $subscription.targets.logo_url) 'subscription logo URL changed'
+
+$selections = Get-Content -Raw -LiteralPath (Join-Path $profileRoot 'selections.json') | ConvertFrom-Json
 Assert-State ((@($selections.PSObject.Properties.Name | Sort-Object) -join ',') -ceq 'catalog_revision,schema_version,selections') 'unexpected selections fields'
 Assert-State ($selections.schema_version -eq 1) 'unexpected selections schema'
 Assert-State ($selections.schema_version -is [int]) 'selections schema must be an integer'
