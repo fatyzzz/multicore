@@ -3102,6 +3102,9 @@ name = "multicore-core-host"
 version = "0.1.0"
 dependencies = [
  "embed-resource",
+ "multicore-core",
+ "serde",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3124,6 +3127,7 @@ dependencies = [
  "tokio",
  "tower",
  "tower-http",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

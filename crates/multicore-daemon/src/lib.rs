@@ -1,3 +1,5 @@
+pub mod elevated_controller;
+
 use std::{
     collections::{HashSet, VecDeque},
     ffi::OsStr,

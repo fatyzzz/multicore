@@ -1,4 +1,5 @@
 mod device_identity;
+pub mod elevation_protocol;
 mod event;
 mod fetch;
 mod input;
