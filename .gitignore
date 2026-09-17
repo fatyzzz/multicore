@@ -1,6 +1,7 @@
 /target/
 /dist/
 /artifacts/
+/.worktrees/
 /fl8-old-visual/
 /.env
 /.env.*
