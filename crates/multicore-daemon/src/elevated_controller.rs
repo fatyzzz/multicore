@@ -1,9 +1,21 @@
-use std::{fmt, path::Path, time::Duration};
+use std::{
+    fmt,
+    future::Future,
+    path::{Path, PathBuf},
+    pin::Pin,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 #[cfg(test)]
 use multicore_core::elevation_protocol::BrokerErrorCode;
 use multicore_core::elevation_protocol::{
-    Authentication, ElevationCommand, ElevationResponse, SessionSecret, response_matches_command,
+    Authentication, ElevatedDiagnosticStream, ElevatedEngine, ElevatedRuntimeState,
+    ElevationCommand, ElevationResponse, SessionSecret, response_matches_command,
+};
+use multicore_core::{
+    CoreLogRecord, DiagnosticStream, Engine, ProcessController, ProcessDiagnostics,
+    RuntimeCheckState,
 };
 use zeroize::Zeroizing;
 
@@ -42,6 +54,287 @@ impl fmt::Display for ElevationError {
 }
 
 impl std::error::Error for ElevationError {}
+
+pub trait BrokerTransport: Send {
+    fn request(&self, command: &ElevationCommand) -> Result<ElevationResponse, ElevationError>;
+}
+
+pub trait BrokerConnector: Send + Sync + 'static {
+    type Transport: BrokerTransport;
+    fn connect(&self, executable: &Path) -> Result<Self::Transport, ElevationError>;
+}
+
+struct ElevatedBroker<C: BrokerConnector> {
+    host_executable: PathBuf,
+    connector: C,
+    session: Mutex<Option<C::Transport>>,
+}
+
+pub struct ElevatedProcessController<C: BrokerConnector> {
+    broker: Arc<ElevatedBroker<C>>,
+    generation_id: u64,
+}
+
+pub struct ElevatedControllerFactory<C: BrokerConnector> {
+    broker: Arc<ElevatedBroker<C>>,
+}
+
+impl<C: BrokerConnector> Clone for ElevatedProcessController<C> {
+    fn clone(&self) -> Self {
+        Self {
+            broker: self.broker.clone(),
+            generation_id: self.generation_id,
+        }
+    }
+}
+
+impl<C: BrokerConnector> ElevatedControllerFactory<C> {
+    fn new(host_executable: PathBuf, connector: C) -> Self {
+        Self {
+            broker: Arc::new(ElevatedBroker {
+                host_executable,
+                connector,
+                session: Mutex::new(None),
+            }),
+        }
+    }
+
+    pub fn controller(
+        &self,
+        generation_id: u64,
+    ) -> Result<ElevatedProcessController<C>, ElevationError> {
+        if generation_id == 0 {
+            return Err(ElevationError::Protocol);
+        }
+        Ok(ElevatedProcessController {
+            broker: self.broker.clone(),
+            generation_id,
+        })
+    }
+
+    pub fn shutdown(&self) {
+        shutdown_broker(&self.broker);
+    }
+}
+
+impl<C: BrokerConnector> Drop for ElevatedBroker<C> {
+    fn drop(&mut self) {
+        shutdown_broker(self);
+    }
+}
+
+impl<C: BrokerConnector> ElevatedProcessController<C> {
+    fn command_blocking(
+        inner: &ElevatedBroker<C>,
+        command: ElevationCommand,
+        launch: bool,
+    ) -> Result<ElevationResponse, ElevationError> {
+        let mut session = inner
+            .session
+            .lock()
+            .map_err(|_| ElevationError::Disconnected)?;
+        if session.is_none() {
+            if !launch {
+                return Err(ElevationError::Disconnected);
+            }
+            *session = Some(inner.connector.connect(&inner.host_executable)?);
+        }
+        let result = session
+            .as_ref()
+            .expect("broker session exists")
+            .request(&command);
+        if result.is_err() {
+            session.take();
+        }
+        result
+    }
+
+    pub fn shutdown(&self) {
+        shutdown_broker(&self.broker);
+    }
+}
+
+fn shutdown_broker<C: BrokerConnector>(broker: &ElevatedBroker<C>) {
+    let Ok(mut session) = broker.session.lock() else {
+        return;
+    };
+    if let Some(transport) = session.take() {
+        let _ = transport.request(&ElevationCommand::Shutdown);
+    }
+}
+
+impl<C: BrokerConnector> ProcessController for ElevatedProcessController<C> {
+    type Error = ElevationError;
+
+    fn start<'a>(
+        &'a self,
+        engine: Engine,
+    ) -> Pin<Box<dyn Future<Output = Result<(), Self::Error>> + Send + 'a>> {
+        let inner = self.broker.clone();
+        let generation_id = self.generation_id;
+        Box::pin(async move {
+            let command = match engine {
+                Engine::Xray => ElevationCommand::StartXray { generation_id },
+                Engine::Mihomo => ElevationCommand::StartMihomo { generation_id },
+            };
+            let response =
+                tokio::task::spawn_blocking(move || Self::command_blocking(&inner, command, true))
+                    .await
+                    .map_err(|_| ElevationError::Io)??;
+            match response {
+                ElevationResponse::Started { engine: actual }
+                    if actual == elevated_engine(engine) =>
+                {
+                    Ok(())
+                }
+                _ => Err(ElevationError::Protocol),
+            }
+        })
+    }
+
+    fn stop<'a>(
+        &'a self,
+        engine: Engine,
+    ) -> Pin<Box<dyn Future<Output = Result<(), Self::Error>> + Send + 'a>> {
+        let inner = self.broker.clone();
+        Box::pin(async move {
+            let command = ElevationCommand::Stop {
+                engine: elevated_engine(engine),
+            };
+            let response =
+                tokio::task::spawn_blocking(move || Self::command_blocking(&inner, command, false))
+                    .await
+                    .map_err(|_| ElevationError::Io)?;
+            let response = match response {
+                Ok(value) => value,
+                Err(ElevationError::Disconnected) => return Ok(()),
+                Err(error) => return Err(error),
+            };
+            match response {
+                ElevationResponse::Stopped { engine: actual }
+                    if actual == elevated_engine(engine) =>
+                {
+                    Ok(())
+                }
+                _ => Err(ElevationError::Protocol),
+            }
+        })
+    }
+
+    fn diagnostics<'a>(&'a self) -> Pin<Box<dyn Future<Output = ProcessDiagnostics> + Send + 'a>> {
+        let inner = self.broker.clone();
+        Box::pin(async move {
+            let response = tokio::task::spawn_blocking(move || {
+                Self::command_blocking(&inner, ElevationCommand::Diagnostics, false)
+            })
+            .await;
+            match response {
+                Ok(Ok(response)) => diagnostics_from_response(response),
+                _ => ProcessDiagnostics::default(),
+            }
+        })
+    }
+}
+
+fn elevated_engine(engine: Engine) -> ElevatedEngine {
+    match engine {
+        Engine::Xray => ElevatedEngine::Xray,
+        Engine::Mihomo => ElevatedEngine::Mihomo,
+    }
+}
+fn runtime_state(state: ElevatedRuntimeState) -> RuntimeCheckState {
+    match state {
+        ElevatedRuntimeState::Stopped => RuntimeCheckState::Stopped,
+        ElevatedRuntimeState::Starting => RuntimeCheckState::Starting,
+        ElevatedRuntimeState::Ready => RuntimeCheckState::Ready,
+        ElevatedRuntimeState::Failed => RuntimeCheckState::Failed,
+        ElevatedRuntimeState::Unsupported => RuntimeCheckState::Unsupported,
+    }
+}
+
+fn diagnostics_from_response(response: ElevationResponse) -> ProcessDiagnostics {
+    match response {
+        ElevationResponse::ProcessDiagnostics {
+            xray,
+            mihomo,
+            tun,
+            logs,
+        } => ProcessDiagnostics {
+            xray: runtime_state(xray),
+            mihomo: runtime_state(mihomo),
+            tun: runtime_state(tun),
+            logs: logs
+                .into_iter()
+                .map(|record| CoreLogRecord {
+                    id: record.id,
+                    timestamp_ms: record.timestamp_ms,
+                    engine: match record.engine {
+                        ElevatedEngine::Xray => Engine::Xray,
+                        ElevatedEngine::Mihomo => Engine::Mihomo,
+                    },
+                    stream: match record.stream {
+                        ElevatedDiagnosticStream::Stdout => DiagnosticStream::Stdout,
+                        ElevatedDiagnosticStream::Stderr => DiagnosticStream::Stderr,
+                    },
+                    message: record.message,
+                })
+                .collect(),
+        },
+        ElevationResponse::Diagnostics {
+            xray_running,
+            mihomo_running,
+        } => ProcessDiagnostics {
+            xray: if xray_running {
+                RuntimeCheckState::Ready
+            } else {
+                RuntimeCheckState::Stopped
+            },
+            mihomo: if mihomo_running {
+                RuntimeCheckState::Ready
+            } else {
+                RuntimeCheckState::Stopped
+            },
+            tun: RuntimeCheckState::Unsupported,
+            logs: Vec::new(),
+        },
+        _ => ProcessDiagnostics::default(),
+    }
+}
+
+pub fn runtime_generation_from_path(path: &Path) -> Result<u64, ElevationError> {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or(ElevationError::Protocol)?;
+    let digits = name
+        .strip_prefix("runtime-")
+        .filter(|digits| digits.len() == 20 && digits.bytes().all(|byte| byte.is_ascii_digit()))
+        .ok_or(ElevationError::Protocol)?;
+    digits
+        .parse::<u64>()
+        .ok()
+        .filter(|value| *value != 0)
+        .ok_or(ElevationError::Protocol)
+}
+
+pub fn packaged_core_host_from(daemon_executable: &Path) -> Result<PathBuf, ElevationError> {
+    let daemon =
+        std::fs::canonicalize(daemon_executable).map_err(|_| ElevationError::LaunchFailed)?;
+    let runtime = daemon.parent().ok_or(ElevationError::LaunchFailed)?;
+    if runtime.file_name().and_then(|name| name.to_str()) != Some("runtime")
+        || daemon.file_name().and_then(|name| name.to_str()) != Some("multicore-daemon.exe")
+    {
+        return Err(ElevationError::LaunchFailed);
+    }
+    let host = runtime.join("multicore-core-host.exe");
+    let host = std::fs::canonicalize(host).map_err(|_| ElevationError::LaunchFailed)?;
+    if host.parent() != Some(runtime)
+        || host.file_name().and_then(|name| name.to_str()) != Some("multicore-core-host.exe")
+    {
+        return Err(ElevationError::LaunchFailed);
+    }
+    Ok(host)
+}
 
 pub trait ElevatedHostLauncher: Send + Sync {
     type Host;
@@ -223,6 +516,33 @@ pub mod windows {
     }
 
     pub struct ShellExecuteLauncher;
+
+    #[derive(Clone, Copy, Debug, Default)]
+    pub struct WindowsBrokerConnector;
+
+    impl BrokerTransport for AuthenticatedPipe {
+        fn request(&self, command: &ElevationCommand) -> Result<ElevationResponse, ElevationError> {
+            let cancelled = AtomicBool::new(false);
+            AuthenticatedPipe::request(self, command, &cancelled)
+        }
+    }
+
+    impl BrokerConnector for WindowsBrokerConnector {
+        type Transport = AuthenticatedPipe;
+
+        fn connect(&self, executable: &Path) -> Result<Self::Transport, ElevationError> {
+            let server = NamedPipeServer::create()?;
+            let secret = SessionSecret::generate().map_err(|_| ElevationError::Io)?;
+            let host = ShellExecuteLauncher.launch(
+                executable,
+                &server.name,
+                ELEVATION_PROTOCOL_VERSION,
+                NamedPipeServer::server_pid(),
+            )?;
+            let cancelled = AtomicBool::new(false);
+            server.authenticate(host, &secret, &cancelled)
+        }
+    }
 
     impl ElevatedHostLauncher for ShellExecuteLauncher {
         type Host = LaunchedHost;
@@ -1215,10 +1535,246 @@ pub mod windows {
     }
 }
 
+#[cfg(windows)]
+pub type ProductionElevatedControllerFactory =
+    ElevatedControllerFactory<windows::WindowsBrokerConnector>;
+
+#[cfg(windows)]
+pub fn production_factory() -> Result<ProductionElevatedControllerFactory, ElevationError> {
+    let daemon = std::env::current_exe().map_err(|_| ElevationError::LaunchFailed)?;
+    let host = packaged_core_host_from(&daemon)?;
+    Ok(ElevatedControllerFactory::new(
+        host,
+        windows::WindowsBrokerConnector,
+    ))
+}
+
+#[cfg(not(windows))]
+#[derive(Clone, Copy)]
+pub struct UnsupportedConnector;
+#[cfg(not(windows))]
+pub struct UnsupportedTransport;
+#[cfg(not(windows))]
+impl BrokerTransport for UnsupportedTransport {
+    fn request(&self, _: &ElevationCommand) -> Result<ElevationResponse, ElevationError> {
+        Err(ElevationError::LaunchFailed)
+    }
+}
+#[cfg(not(windows))]
+impl BrokerConnector for UnsupportedConnector {
+    type Transport = UnsupportedTransport;
+    fn connect(&self, _: &Path) -> Result<Self::Transport, ElevationError> {
+        Err(ElevationError::LaunchFailed)
+    }
+}
+#[cfg(not(windows))]
+pub type ProductionElevatedControllerFactory = ElevatedControllerFactory<UnsupportedConnector>;
+#[cfg(not(windows))]
+pub fn production_factory() -> Result<ProductionElevatedControllerFactory, ElevationError> {
+    Ok(ElevatedControllerFactory::new(
+        PathBuf::new(),
+        UnsupportedConnector,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use multicore_core::elevation_protocol::{BrokerErrorCode, ElevatedEngine, SessionSecret};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    #[derive(Default)]
+    struct FakeState {
+        connects: AtomicUsize,
+        fail_next_connect: AtomicBool,
+        disconnect_next_request: AtomicBool,
+        commands: Mutex<Vec<ElevationCommand>>,
+    }
+    #[derive(Clone)]
+    struct FakeConnector(Arc<FakeState>);
+    struct FakeTransport(Arc<FakeState>);
+    impl BrokerConnector for FakeConnector {
+        type Transport = FakeTransport;
+        fn connect(&self, _: &Path) -> Result<Self::Transport, ElevationError> {
+            self.0.connects.fetch_add(1, Ordering::Relaxed);
+            if self.0.fail_next_connect.swap(false, Ordering::Relaxed) {
+                return Err(ElevationError::ElevationCancelled);
+            }
+            Ok(FakeTransport(self.0.clone()))
+        }
+    }
+    impl BrokerTransport for FakeTransport {
+        fn request(&self, command: &ElevationCommand) -> Result<ElevationResponse, ElevationError> {
+            if self
+                .0
+                .disconnect_next_request
+                .swap(false, Ordering::Relaxed)
+            {
+                return Err(ElevationError::Disconnected);
+            }
+            self.0.commands.lock().unwrap().push(command.clone());
+            Ok(match command {
+                ElevationCommand::StartXray { .. } => ElevationResponse::Started {
+                    engine: ElevatedEngine::Xray,
+                },
+                ElevationCommand::StartMihomo { .. } => ElevationResponse::Started {
+                    engine: ElevatedEngine::Mihomo,
+                },
+                ElevationCommand::Stop { engine } => ElevationResponse::Stopped { engine: *engine },
+                ElevationCommand::Diagnostics => ElevationResponse::ProcessDiagnostics {
+                    xray: ElevatedRuntimeState::Ready,
+                    mihomo: ElevatedRuntimeState::Ready,
+                    tun: ElevatedRuntimeState::Ready,
+                    logs: vec![multicore_core::elevation_protocol::ElevatedLogRecord {
+                        id: 7,
+                        timestamp_ms: 9,
+                        engine: ElevatedEngine::Mihomo,
+                        stream: ElevatedDiagnosticStream::Stderr,
+                        message: "ready".into(),
+                    }],
+                },
+                ElevationCommand::Shutdown => ElevationResponse::ShuttingDown,
+            })
+        }
+    }
+
+    fn fake_controller(state: Arc<FakeState>) -> ElevatedProcessController<FakeConnector> {
+        ElevatedControllerFactory::new(PathBuf::from("fixed-host.exe"), FakeConnector(state))
+            .controller(42)
+            .unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn supervisor_uses_one_lazy_host_and_preserves_order_across_reconnect() {
+        let state = Arc::new(FakeState::default());
+        let controller = Arc::new(fake_controller(state.clone()));
+        let supervisor = multicore_core::Supervisor::new(controller.clone());
+        assert_eq!(state.connects.load(Ordering::Relaxed), 0);
+        supervisor.connect().await.unwrap();
+        supervisor.disconnect().await.unwrap();
+        supervisor.connect().await.unwrap();
+        assert_eq!(state.connects.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            *state.commands.lock().unwrap(),
+            vec![
+                ElevationCommand::StartXray { generation_id: 42 },
+                ElevationCommand::StartMihomo { generation_id: 42 },
+                ElevationCommand::Stop {
+                    engine: ElevatedEngine::Mihomo
+                },
+                ElevationCommand::Stop {
+                    engine: ElevatedEngine::Xray
+                },
+                ElevationCommand::StartXray { generation_id: 42 },
+                ElevationCommand::StartMihomo { generation_id: 42 },
+            ]
+        );
+        controller.shutdown();
+        assert!(matches!(
+            state.commands.lock().unwrap().last(),
+            Some(ElevationCommand::Shutdown)
+        ));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn production_factory_reuses_one_host_across_generation_controllers() {
+        let state = Arc::new(FakeState::default());
+        let factory = ElevatedControllerFactory::new(
+            PathBuf::from("fixed-host.exe"),
+            FakeConnector(state.clone()),
+        );
+        let first = Arc::new(factory.controller(41).unwrap());
+        multicore_core::Supervisor::new(first.clone())
+            .connect()
+            .await
+            .unwrap();
+        multicore_core::Supervisor::new(first)
+            .disconnect()
+            .await
+            .unwrap();
+        let second = Arc::new(factory.controller(42).unwrap());
+        multicore_core::Supervisor::new(second)
+            .connect()
+            .await
+            .unwrap();
+        assert_eq!(state.connects.load(Ordering::Relaxed), 1);
+        factory.shutdown();
+        assert!(matches!(
+            state.commands.lock().unwrap().last(),
+            Some(ElevationCommand::Shutdown)
+        ));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn uac_cancel_and_host_eof_never_connect_and_remain_retryable() {
+        let state = Arc::new(FakeState::default());
+        state.fail_next_connect.store(true, Ordering::Relaxed);
+        let controller = Arc::new(fake_controller(state.clone()));
+        let supervisor = multicore_core::Supervisor::new(controller.clone());
+        assert!(supervisor.connect().await.is_err());
+        assert_eq!(state.connects.load(Ordering::Relaxed), 1);
+        controller.start(Engine::Xray).await.unwrap();
+        state.disconnect_next_request.store(true, Ordering::Relaxed);
+        assert!(controller.start(Engine::Mihomo).await.is_err());
+        controller.stop(Engine::Xray).await.unwrap();
+        controller.start(Engine::Xray).await.unwrap();
+        assert_eq!(state.connects.load(Ordering::Relaxed), 3);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn broker_diagnostics_translate_without_launching_a_new_host() {
+        let state = Arc::new(FakeState::default());
+        let controller = fake_controller(state.clone());
+        assert_eq!(
+            controller.diagnostics().await,
+            ProcessDiagnostics::default()
+        );
+        controller.start(Engine::Xray).await.unwrap();
+        let diagnostics = controller.diagnostics().await;
+        assert_eq!(
+            (diagnostics.xray, diagnostics.mihomo, diagnostics.tun),
+            (
+                RuntimeCheckState::Ready,
+                RuntimeCheckState::Ready,
+                RuntimeCheckState::Ready
+            )
+        );
+        assert_eq!(diagnostics.logs[0].message, "ready");
+        assert_eq!(state.connects.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn runtime_generation_requires_exact_fixed_width_name() {
+        assert_eq!(
+            runtime_generation_from_path(Path::new(r"C:\data\runtime-00000000000000000042")),
+            Ok(42)
+        );
+        for invalid in [
+            r"C:\data\runtime-42",
+            r"C:\data\snapshot-00000000000000000042",
+            r"C:\data\runtime-00000000000000000000",
+        ] {
+            assert!(runtime_generation_from_path(Path::new(invalid)).is_err());
+        }
+    }
+
+    #[test]
+    fn packaged_host_discovery_accepts_only_the_fixed_runtime_sibling() {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = root.path().join("runtime");
+        std::fs::create_dir(&runtime).unwrap();
+        let daemon = runtime.join("multicore-daemon.exe");
+        let host = runtime.join("multicore-core-host.exe");
+        std::fs::write(&daemon, b"daemon").unwrap();
+        std::fs::write(&host, b"host").unwrap();
+        assert_eq!(
+            packaged_core_host_from(&daemon).unwrap(),
+            std::fs::canonicalize(&host).unwrap()
+        );
+        assert!(packaged_core_host_from(&runtime.join("renamed-daemon.exe")).is_err());
+        std::fs::remove_file(host).unwrap();
+        assert!(packaged_core_host_from(&daemon).is_err());
+    }
 
     #[test]
     fn wrong_pid_second_client_and_wrong_secret_fail_closed() {

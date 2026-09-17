@@ -3,14 +3,15 @@ use std::{
     env, io,
     net::{IpAddr, SocketAddr, ToSocketAddrs},
     path::PathBuf,
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 use multicore_core::{
-    CoreLogBuffer, DeviceIdentity, MihomoRuntimeControl, PersistentSnapshotStore,
-    ReqwestHttpClient, RuntimePaths, SidecarProcessController, Snapshot, SubscriptionFetcher,
-    default_ipv4_interface, stage_runtime_with_mihomo_control, xray_outbound_server_domains,
+    DeviceIdentity, MihomoRuntimeControl, PersistentSnapshotStore, ReqwestHttpClient, Snapshot,
+    SubscriptionFetcher, default_ipv4_interface, stage_runtime_with_mihomo_control,
+    xray_outbound_server_domains,
 };
+use multicore_daemon::elevated_controller::{production_factory, runtime_generation_from_path};
 use multicore_daemon::{
     BackendError, CoreBackend, MihomoHttpSelector, PreparedController, bind_loopback,
     publish_readiness_if_enabled, transactional_controller_factory, try_router,
@@ -24,8 +25,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .parse()?;
     let data_directory = PathBuf::from(required_env("MULTICORE_DAEMON_DATA_DIR")?);
     let device_identity = DeviceIdentity::load_or_create(&data_directory)?;
-    let xray_binary = PathBuf::from(required_env("MULTICORE_XRAY_BIN")?);
-    let mihomo_binary = PathBuf::from(required_env("MULTICORE_MIHOMO_BIN")?);
     let mihomo_controller_address: SocketAddr = env::var("MULTICORE_MIHOMO_CONTROLLER_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:19090".to_owned())
         .parse()?;
@@ -53,9 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store = PersistentSnapshotStore::open(data_directory.join("snapshots"))?;
     let fetcher = SubscriptionFetcher::new(ReqwestHttpClient::new(device_identity)?);
     let runtime_root = data_directory.join("runtime");
-    let core_logs = Arc::new(CoreLogBuffer::persistent_or_memory(
-        data_directory.join("logs").join("latest-core.log"),
-    ));
+    let elevated_factory = Mutex::new(None);
     let controller_factory = transactional_controller_factory(move |snapshot: &Snapshot| {
         let xray_outbound_interface = default_ipv4_interface().map_err(|_| BackendError::new())?;
         let resolved_hosts = resolve_xray_hosts(snapshot).map_err(|_| BackendError::new())?;
@@ -66,16 +63,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map_err(|_| BackendError::new())?;
         let staged = stage_runtime_with_mihomo_control(snapshot, &runtime_root, &control)
             .map_err(|_| BackendError::new())?;
-        let paths = staged.paths();
-        let controller = Arc::new(SidecarProcessController::new_with_logs(
-            RuntimePaths {
-                xray_binary: xray_binary.clone(),
-                mihomo_binary: mihomo_binary.clone(),
-                xray_config: paths.xray_config.clone(),
-                mihomo_config: paths.mihomo_config.clone(),
-            },
-            core_logs.clone(),
-        ));
+        let generation = runtime_generation_from_path(&staged.paths().directory)
+            .map_err(|_| BackendError::new())?;
+        let mut elevated_factory = elevated_factory.lock().map_err(|_| BackendError::new())?;
+        if elevated_factory.is_none() {
+            *elevated_factory = Some(production_factory().map_err(|_| BackendError::new())?);
+        }
+        let elevated_factory = elevated_factory.as_ref().ok_or_else(BackendError::new)?;
+        let controller = Arc::new(
+            elevated_factory
+                .controller(generation)
+                .map_err(|_| BackendError::new())?,
+        );
         Ok(PreparedController::with_runtime(controller, staged))
     });
     let backend =
@@ -149,6 +148,27 @@ mod tests {
     use std::net::IpAddr;
 
     use super::resolve_xray_hosts_with;
+
+    const MAIN_SOURCE: &str = include_str!("main.rs");
+
+    #[test]
+    fn production_daemon_uses_only_the_elevated_core_controller() {
+        let production = MAIN_SOURCE.split("#[cfg(test)]").next().unwrap();
+        assert!(production.contains("elevated_factory"));
+        assert!(production.contains(".controller(generation)"));
+        assert!(production.contains("runtime_generation_from_path"));
+        for forbidden in [
+            "MULTICORE_XRAY_BIN",
+            "MULTICORE_MIHOMO_BIN",
+            "SidecarProcessController",
+            "RuntimePaths",
+        ] {
+            assert!(
+                !production.contains(forbidden),
+                "production main still contains {forbidden}"
+            );
+        }
+    }
 
     #[test]
     fn xray_host_bootstrap_collects_client_local_ip_answers() {
