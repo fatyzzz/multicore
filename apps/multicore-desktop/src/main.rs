@@ -3,6 +3,7 @@
 mod app_icon;
 mod bootstrap;
 mod daemon;
+mod preferences;
 mod single_instance;
 mod tray;
 mod updater;
