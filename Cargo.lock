@@ -3098,6 +3098,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "multicore-core-host"
+version = "0.1.0"
+dependencies = [
+ "embed-resource",
+]
+
+[[package]]
 name = "multicore-daemon"
 version = "0.1.0"
 dependencies = [

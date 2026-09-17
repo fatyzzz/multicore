@@ -1,0 +1,16 @@
+[package]
+name = "multicore-core-host"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "multicore-core-host"
+path = "src/main.rs"
+test = false
+bench = false
+
+[build-dependencies]
+embed-resource = "=3.0.11"

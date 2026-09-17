@@ -4,6 +4,7 @@ members = [
     "crates/multicore-daemon",
     "crates/multicore-update",
     "apps/multicore-desktop",
+    "apps/multicore-core-host",
     "apps/multicore-updater",
 ]
 resolver = "2"

@@ -1,13 +1,12 @@
 param(
     [Parameter(Mandatory = $true)]
-    [string]$ExecutablePath
+    [string]$DesktopExecutablePath,
+
+    [Parameter(Mandatory = $true)]
+    [string]$CoreHostExecutablePath
 )
 
 $ErrorActionPreference = 'Stop'
-$ExecutablePath = [IO.Path]::GetFullPath($ExecutablePath)
-if (-not (Test-Path -LiteralPath $ExecutablePath -PathType Leaf)) {
-    throw "Executable not found: $ExecutablePath"
-}
 
 Add-Type @'
 using System;
@@ -35,50 +34,63 @@ public static class MultiCoreManifestResource
 }
 '@
 
-$LoadLibraryAsDataFile = 0x00000002
-$ResourceId = [IntPtr]1
-$ManifestResourceType = [IntPtr]24
-$module = [MultiCoreManifestResource]::LoadLibraryExW(
-    $ExecutablePath,
-    [IntPtr]::Zero,
-    $LoadLibraryAsDataFile
-)
-if ($module -eq [IntPtr]::Zero) {
-    throw "Could not load executable resources: $([Runtime.InteropServices.Marshal]::GetLastWin32Error())"
-}
+function Assert-NumericManifest(
+    [string]$ExecutablePath,
+    [string]$RequiredLevel,
+    [string]$ForbiddenLevel
+) {
+    $ExecutablePath = [IO.Path]::GetFullPath($ExecutablePath)
+    if (-not (Test-Path -LiteralPath $ExecutablePath -PathType Leaf)) {
+        throw "Executable not found: $ExecutablePath"
+    }
 
-try {
-    $resource = [MultiCoreManifestResource]::FindResourceW(
-        $module,
-        $ResourceId,
-        $ManifestResourceType
+    $module = [MultiCoreManifestResource]::LoadLibraryExW(
+        $ExecutablePath,
+        [IntPtr]::Zero,
+        0x00000002
     )
-    if ($resource -eq [IntPtr]::Zero) {
-        throw "Numeric RT_MANIFEST resource #1 is missing"
+    if ($module -eq [IntPtr]::Zero) {
+        throw "Could not load executable resources: $([Runtime.InteropServices.Marshal]::GetLastWin32Error())"
     }
 
-    $size = [MultiCoreManifestResource]::SizeofResource($module, $resource)
-    if ($size -eq 0 -or $size -gt 1MB) {
-        throw "Embedded manifest size is invalid: $size"
-    }
-    $loaded = [MultiCoreManifestResource]::LoadResource($module, $resource)
-    $pointer = [MultiCoreManifestResource]::LockResource($loaded)
-    if ($loaded -eq [IntPtr]::Zero -or $pointer -eq [IntPtr]::Zero) {
-        throw "Embedded manifest could not be loaded"
-    }
+    try {
+        # Keep both identifiers numeric: name #1 and RT_MANIFEST type 24.
+        $resource = [MultiCoreManifestResource]::FindResourceW(
+            $module,
+            [IntPtr]1,
+            [IntPtr]24
+        )
+        if ($resource -eq [IntPtr]::Zero) {
+            throw "Numeric RT_MANIFEST resource #1 is missing"
+        }
 
-    $bytes = New-Object byte[] $size
-    [Runtime.InteropServices.Marshal]::Copy($pointer, $bytes, 0, $size)
-    $manifest = [Text.Encoding]::UTF8.GetString($bytes)
-    $required = '<requestedExecutionLevel level="requireAdministrator" uiAccess="false" />'
-    if (-not $manifest.Contains($required)) {
-        throw "Embedded manifest does not request administrator elevation"
+        $size = [MultiCoreManifestResource]::SizeofResource($module, $resource)
+        if ($size -eq 0 -or $size -gt 1MB) {
+            throw "Embedded manifest size is invalid: $size"
+        }
+        $loaded = [MultiCoreManifestResource]::LoadResource($module, $resource)
+        $pointer = [MultiCoreManifestResource]::LockResource($loaded)
+        if ($loaded -eq [IntPtr]::Zero -or $pointer -eq [IntPtr]::Zero) {
+            throw "Embedded manifest could not be loaded"
+        }
+
+        $bytes = New-Object byte[] $size
+        [Runtime.InteropServices.Marshal]::Copy($pointer, $bytes, 0, $size)
+        $manifest = [Text.Encoding]::UTF8.GetString($bytes)
+        if (-not $manifest.Contains($RequiredLevel)) {
+            throw "Embedded manifest does not contain required execution level"
+        }
+        if ($manifest.Contains($ForbiddenLevel)) {
+            throw "Embedded manifest contains forbidden execution level"
+        }
+    } finally {
+        [void][MultiCoreManifestResource]::FreeLibrary($module)
     }
-    if ($manifest.Contains('level="asInvoker"')) {
-        throw "Embedded release manifest still contains asInvoker"
-    }
-} finally {
-    [void][MultiCoreManifestResource]::FreeLibrary($module)
 }
 
-Write-Host "PASS: release PE embeds numeric RT_MANIFEST with requireAdministrator"
+$asInvoker = '<requestedExecutionLevel level="asInvoker" uiAccess="false" />'
+$requireAdministrator = '<requestedExecutionLevel level="requireAdministrator" uiAccess="false" />'
+Assert-NumericManifest $DesktopExecutablePath $asInvoker $requireAdministrator
+Assert-NumericManifest $CoreHostExecutablePath $requireAdministrator $asInvoker
+
+Write-Host "PASS: desktop and core-host embed numeric RT_MANIFEST #1 with least-privilege levels"
