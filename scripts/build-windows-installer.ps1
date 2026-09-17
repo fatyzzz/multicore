@@ -24,6 +24,7 @@ $ExpectedFiles = @(
     'licenses/mihomo-GPL-3.0.txt',
     'runtime/multicore-daemon.exe',
     'runtime/multicore-updater.exe',
+    'runtime/multicore-core-host.exe',
     'versions.json'
 )
 

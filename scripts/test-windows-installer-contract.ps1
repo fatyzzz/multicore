@@ -19,6 +19,8 @@ Assert-True (Test-Path -LiteralPath $BuilderPath -PathType Leaf) 'installer buil
 $definition = Get-Content -Raw -LiteralPath $DefinitionPath
 $builder = Get-Content -Raw -LiteralPath $BuilderPath
 
+Assert-True (-not $definition.Contains('Verb: "runas"')) 'installer must not elevate desktop postinstall launch'
+
 foreach ($token in @(
     'DefaultDirName={localappdata}\Programs\MultiCore',
     'PrivilegesRequired=lowest',
@@ -37,7 +39,6 @@ foreach ($token in @(
     '""{app}\current\MultiCore.exe"" ""%1""',
     'Filename: "{app}\current\MultiCore.exe"',
     'WorkingDir: "{app}\current"',
-    'Verb: "runas"',
     'Flags: postinstall shellexec skipifsilent',
     'Type: filesandordirs; Name: "{app}\.multicore-previous-*"',
     'Type: filesandordirs; Name: "{app}\.multicore-failed-*"',
@@ -90,6 +91,7 @@ try {
         'licenses\mihomo-GPL-3.0.txt',
         'runtime\multicore-daemon.exe',
         'runtime\multicore-updater.exe',
+        'runtime\multicore-core-host.exe',
         'versions.json'
     )
     $lines = foreach ($relative in $files) {

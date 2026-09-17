@@ -10,7 +10,7 @@ The repository is supplied at build time as `MULTICORE_UPDATE_REPOSITORY=owner/r
 
 - Release tag: `v<semver>`.
 - Asset name: `multicore-windows-x64.zip`.
-- Archive content: the portable payload at the ZIP root, including `MultiCore.exe`, `runtime/multicore-daemon.exe`, `runtime/multicore-updater.exe`, both cores, notices, licenses, `versions.json`, and `SHA256SUMS.txt`.
+- Archive content: the portable payload at the ZIP root, including `MultiCore.exe`, `runtime/multicore-daemon.exe`, `runtime/multicore-updater.exe`, `runtime/multicore-core-host.exe`, both cores, notices, licenses, `versions.json`, and `SHA256SUMS.txt`.
 - GitHub's release asset `digest` must be present as `sha256:<64 lowercase hex>` and must match the downloaded archive.
 - `SHA256SUMS.txt` must cover every other regular archive file exactly once; unlisted files, duplicate paths, links, absolute paths, traversal, and oversized archives are rejected.
 

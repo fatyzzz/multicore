@@ -29,7 +29,7 @@ Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
 CloseApplications=yes
-CloseApplicationsFilter=MultiCore.exe,multicore-daemon.exe,multicore-updater.exe,mihomo.exe,xray.exe
+CloseApplicationsFilter=MultiCore.exe,multicore-daemon.exe,multicore-updater.exe,multicore-core-host.exe,mihomo.exe,xray.exe
 RestartApplications=no
 UninstallDisplayIcon={app}\current\MultiCore.exe
 VersionInfoVersion={#AppVersion}
@@ -59,7 +59,7 @@ Root: HKCU; Subkey: "Software\Classes\multicore\DefaultIcon"; ValueType: string;
 Root: HKCU; Subkey: "Software\Classes\multicore\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\current\MultiCore.exe"" ""%1"""
 
 [Run]
-Filename: "{app}\current\MultiCore.exe"; Description: "Запустить MultiCore"; WorkingDir: "{app}\current"; Verb: "runas"; Flags: postinstall shellexec skipifsilent
+Filename: "{app}\current\MultiCore.exe"; Description: "Запустить MultiCore"; WorkingDir: "{app}\current"; Flags: postinstall shellexec skipifsilent
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\.multicore-previous-*"

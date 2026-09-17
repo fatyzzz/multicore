@@ -6,6 +6,7 @@ param(
     [string]$DesktopExecutablePath,
     [string]$DaemonExecutablePath,
     [string]$UpdaterExecutablePath,
+    [string]$CoreHostExecutablePath,
     [string]$UpdateRepository,
     [string]$ReleaseAssetPath,
     [switch]$AssertReleaseReady,
@@ -150,7 +151,7 @@ function Invoke-PinnedRustBuild {
         } else {
             Remove-Item Env:MULTICORE_UPDATE_REPOSITORY -ErrorAction SilentlyContinue
         }
-        & cargo build --locked --release -p $Build.desktopPackage -p $Build.daemonPackage -p $Build.updaterPackage
+        & cargo build --locked --release -p $Build.desktopPackage -p $Build.daemonPackage -p $Build.updaterPackage -p $Build.coreHostPackage
         if ($LASTEXITCODE -ne 0) { throw 'Pinned Rust release build failed' }
     } finally {
         Pop-Location
@@ -458,7 +459,7 @@ try {
     Copy-CreateNew $manifestFull $stagedManifest
     $manifest = Get-Content -Raw -LiteralPath $stagedManifest | ConvertFrom-Json
     if ($manifest.schemaVersion -ne 1 -or $manifest.platform -cne 'windows-x64') { throw 'Unsupported Windows package manifest' }
-    if ($manifest.build.rustToolchain -cne '1.98.1' -or $manifest.build.desktopPackage -cne 'multicore-desktop' -or $manifest.build.daemonPackage -cne 'multicore-daemon' -or $manifest.build.updaterPackage -cne 'multicore-updater') { throw 'Unexpected build provenance in manifest' }
+    if ($manifest.build.rustToolchain -cne '1.98.1' -or $manifest.build.desktopPackage -cne 'multicore-desktop' -or $manifest.build.daemonPackage -cne 'multicore-daemon' -or $manifest.build.updaterPackage -cne 'multicore-updater' -or $manifest.build.coreHostPackage -cne 'multicore-core-host') { throw 'Unexpected build provenance in manifest' }
     foreach ($componentName in @('xray', 'mihomo')) {
         $component = $manifest.components.$componentName
         if ($component.commit -cnotmatch '^[0-9a-f]{40}$') { throw "$componentName must use a full lowercase commit pin" }
@@ -478,7 +479,7 @@ try {
     }
 
     if ($isProductionManifest) {
-        if ($DesktopExecutablePath -or $DaemonExecutablePath -or $UpdaterExecutablePath) {
+        if ($DesktopExecutablePath -or $DaemonExecutablePath -or $UpdaterExecutablePath -or $CoreHostExecutablePath) {
             throw 'Production packaging builds all Rust executables internally; executable overrides are fixture-only'
         }
         $rustTarget = Join-Path $stage '.rust-target'
@@ -486,22 +487,27 @@ try {
         $DesktopExecutablePath = Join-Path $rustTarget 'release\multicore-desktop.exe'
         $DaemonExecutablePath = Join-Path $rustTarget 'release\multicore-daemon.exe'
         $UpdaterExecutablePath = Join-Path $rustTarget 'release\multicore-apply.exe'
-    } elseif (-not $DesktopExecutablePath -or -not $DaemonExecutablePath -or -not $UpdaterExecutablePath) {
+        $CoreHostExecutablePath = Join-Path $rustTarget 'release\multicore-core-host.exe'
+    } elseif (-not $DesktopExecutablePath -or -not $DaemonExecutablePath -or -not $UpdaterExecutablePath -or -not $CoreHostExecutablePath) {
         throw 'Fixture packaging requires all executable paths'
     }
     $stagedDesktop = Join-Path $stage 'MultiCore.exe'
     $stagedDaemon = Join-Path $stage 'runtime\multicore-daemon.exe'
     $stagedUpdater = Join-Path $stage 'runtime\multicore-updater.exe'
+    $stagedCoreHost = Join-Path $stage 'runtime\multicore-core-host.exe'
     Copy-CreateNew $DesktopExecutablePath $stagedDesktop
     Copy-CreateNew $DaemonExecutablePath $stagedDaemon
     Copy-CreateNew $UpdaterExecutablePath $stagedUpdater
+    Copy-CreateNew $CoreHostExecutablePath $stagedCoreHost
     Assert-Amd64PeExecutable $stagedDesktop 'Staged desktop executable'
     Assert-Amd64PeExecutable $stagedDaemon 'Staged daemon executable'
     Assert-Amd64PeExecutable $stagedUpdater 'Staged updater executable'
+    Assert-Amd64PeExecutable $stagedCoreHost 'Staged core-host executable'
     if ($isProductionManifest) {
         Assert-NoPrivateBuildPaths $stagedDesktop 'Staged desktop executable'
         Assert-NoPrivateBuildPaths $stagedDaemon 'Staged daemon executable'
         Assert-NoPrivateBuildPaths $stagedUpdater 'Staged updater executable'
+        Assert-NoPrivateBuildPaths $stagedCoreHost 'Staged core-host executable'
         $rustTargetFull = Get-FullPath $rustTarget
         if ((Split-Path -Parent $rustTargetFull) -cne (Get-FullPath $stage) -or (Split-Path -Leaf $rustTargetFull) -cne '.rust-target') {
             throw 'Refusing unsafe isolated Rust target cleanup'
@@ -535,7 +541,7 @@ try {
     [string[]]$expectedDirectories = @('cores', 'licenses', 'runtime')
     if (($directories -join '|') -cne ($expectedDirectories -join '|')) { throw "Staged directory inventory is not exact: $($directories -join ', ')" }
     [string[]]$files = $inventory.Files
-    [string[]]$expected = @('MultiCore.exe', 'README.md', 'THIRD_PARTY_NOTICES.md', 'cores/mihomo.exe', 'cores/xray.exe', 'licenses/Xray-core-MPL-2.0.txt', 'licenses/mihomo-GPL-3.0.txt', 'runtime/multicore-daemon.exe', 'runtime/multicore-updater.exe', 'versions.json')
+    [string[]]$expected = @('MultiCore.exe', 'README.md', 'THIRD_PARTY_NOTICES.md', 'cores/mihomo.exe', 'cores/xray.exe', 'licenses/Xray-core-MPL-2.0.txt', 'licenses/mihomo-GPL-3.0.txt', 'runtime/multicore-core-host.exe', 'runtime/multicore-daemon.exe', 'runtime/multicore-updater.exe', 'versions.json')
     if (($files -join '|') -cne ($expected -join '|')) { throw "Staged file inventory is not exact: $($files -join ', ')" }
     $lines = foreach ($relative in $files) { '{0} *{1}' -f (Get-Sha256 (Join-Path $stage $relative)), $relative }
     $sumPath = Join-Path $stage 'SHA256SUMS.txt'
@@ -545,7 +551,7 @@ try {
 
     $finalInventory = Get-StageInventory $stage
     [string[]]$finalFiles = $finalInventory.Files
-    [string[]]$expectedFinalFiles = @('MultiCore.exe', 'README.md', 'SHA256SUMS.txt', 'THIRD_PARTY_NOTICES.md', 'cores/mihomo.exe', 'cores/xray.exe', 'licenses/Xray-core-MPL-2.0.txt', 'licenses/mihomo-GPL-3.0.txt', 'runtime/multicore-daemon.exe', 'runtime/multicore-updater.exe', 'versions.json')
+    [string[]]$expectedFinalFiles = @('MultiCore.exe', 'README.md', 'SHA256SUMS.txt', 'THIRD_PARTY_NOTICES.md', 'cores/mihomo.exe', 'cores/xray.exe', 'licenses/Xray-core-MPL-2.0.txt', 'licenses/mihomo-GPL-3.0.txt', 'runtime/multicore-core-host.exe', 'runtime/multicore-daemon.exe', 'runtime/multicore-updater.exe', 'versions.json')
     if (($finalFiles -join '|') -cne ($expectedFinalFiles -join '|')) { throw "Final file inventory is not exact: $($finalFiles -join ', ')" }
     [string[]]$finalDirectories = $finalInventory.Directories
     if (($finalDirectories -join '|') -cne ($expectedDirectories -join '|')) { throw "Final directory inventory is not exact: $($finalDirectories -join ', ')" }

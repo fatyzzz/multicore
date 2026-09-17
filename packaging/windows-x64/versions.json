@@ -5,7 +5,8 @@
     "rustToolchain": "1.98.1",
     "desktopPackage": "multicore-desktop",
     "daemonPackage": "multicore-daemon",
-    "updaterPackage": "multicore-updater"
+    "updaterPackage": "multicore-updater",
+    "coreHostPackage": "multicore-core-host"
   },
   "components": {
     "xray": {
