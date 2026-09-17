@@ -3757,13 +3757,45 @@ mod tests {
         assert!(source.contains("if !root.has-service-logo: Image"));
         assert!(source.contains("@image-url(\"../assets/power.svg\")"));
         assert!(source.contains("signal-mesh-field := Rectangle"));
+        assert!(source.contains("connect-halo := Rectangle"));
+        assert!(source.contains("power-cursor-wash := Rectangle"));
+        assert!(source.contains("power-mesh := Rectangle"));
+        assert!(source.contains("for _[button-grid-x] in 10"));
+        assert!(source.contains("for _[button-grid-y] in 10"));
+        let power_mesh = source
+            .split("power-mesh := Rectangle")
+            .nth(1)
+            .and_then(|source| source.split("power-cursor-wash := Rectangle").next())
+            .expect("power mesh source");
+        let power_mesh_frame = power_mesh
+            .split("animate opacity")
+            .next()
+            .expect("power mesh frame");
+        assert!(power_mesh_frame.contains("width: parent.width;"));
+        assert!(power_mesh_frame.contains("height: parent.height;"));
+        let power_wash = source
+            .split("power-cursor-wash := Rectangle")
+            .nth(1)
+            .and_then(|source| source.split("if root.has-service-logo: Rectangle").next())
+            .expect("power wash source");
+        let power_wash_frame = power_wash
+            .split("background: @radial-gradient")
+            .next()
+            .expect("power wash frame");
+        assert!(power_wash_frame.contains("width: parent.width;"));
+        assert!(power_wash_frame.contains("height: parent.height;"));
         assert!(source.contains("power-touch.mouse-x"));
         assert!(source.contains("power-touch.mouse-y"));
         assert!(source.contains("power-touch.has-hover"));
+        assert!(source.contains("background: power-touch.has-hover || power-action.has-focus"));
         assert!(source.contains("@radial-gradient("));
         assert!(source.contains("circle 108px at cursor-x cursor-y"));
+        assert!(source.contains("circle 56px at cursor-x cursor-y"));
+        assert!(source.contains("circle 48px at cursor-x cursor-y"));
         assert!(source.contains("for _[grid-x] in 28"));
         assert!(source.contains("for _[grid-y] in 13"));
+        assert!(source.contains("grid-line-strong"));
+        assert!(source.contains("background: signal-mesh-field.grid-line-strong;"));
         assert!(!source.contains("Local signal grid: structural guides"));
         assert!(!source.contains("background: #ffffff05;"));
         assert!(source.contains("subscription-announcement-text"));

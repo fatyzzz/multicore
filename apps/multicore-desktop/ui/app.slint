@@ -564,15 +564,16 @@ export component AppWindow inherits Window {
                                 signal-mesh-field := Rectangle {
                                     property <length> cursor-x: power-touch.has-hover ? 72px + power-touch.mouse-x : 108px;
                                     property <length> cursor-y: power-touch.has-hover ? 12px + power-touch.mouse-y : 48px;
-                                    property <color> glow-strong: root.status-tone == "success" ? #3ccb7f3d : root.status-tone == "danger" ? #f06a6a3d : #4c9dff42;
-                                    property <color> glow-soft: root.status-tone == "success" ? #3ccb7f16 : root.status-tone == "danger" ? #f06a6a16 : #4c9dff18;
+                                    property <color> glow-strong: root.status-tone == "success" ? #3ccb7f70 : root.status-tone == "danger" ? #f06a6a70 : #4c9dff78;
+                                    property <color> glow-soft: root.status-tone == "success" ? #3ccb7f24 : root.status-tone == "danger" ? #f06a6a24 : #4c9dff29;
+                                    property <color> grid-line-strong: root.status-tone == "success" ? #66e8a68f : root.status-tone == "danger" ? #ff8b8b8f : #77b8ff9c;
                                     x: -72px;
                                     y: -12px;
                                     width: 216px;
                                     height: 96px;
                                     border-radius: 24px;
                                     clip: true;
-                                    opacity: power-touch.has-hover ? 1 : power-action.has-focus ? 0.68 : 0.12;
+                                    opacity: power-touch.has-hover || power-action.has-focus ? 1 : 0.06;
                                     background: @radial-gradient(
                                         circle 108px at cursor-x cursor-y,
                                         glow-strong 0%,
@@ -585,14 +586,35 @@ export component AppWindow inherits Window {
                                         x: grid-x * 8px;
                                         width: 1px;
                                         height: parent.height;
-                                        background: root.status-tone == "success" ? #66e8a652 : root.status-tone == "danger" ? #ff8b8b52 : #77b8ff5c;
+                                        background: signal-mesh-field.grid-line-strong;
                                     }
                                     for _[grid-y] in 13: Rectangle {
                                         y: grid-y * 8px;
                                         width: parent.width;
                                         height: 1px;
-                                        background: root.status-tone == "success" ? #66e8a652 : root.status-tone == "danger" ? #ff8b8b52 : #77b8ff5c;
+                                        background: signal-mesh-field.grid-line-strong;
                                     }
+                                }
+
+                                connect-halo := Rectangle {
+                                    property <length> cursor-x: power-touch.has-hover ? 10px + power-touch.mouse-x : 46px;
+                                    property <length> cursor-y: power-touch.has-hover ? 10px + power-touch.mouse-y : 46px;
+                                    property <color> halo-core: root.status-tone == "success" ? #66e8a679 : root.status-tone == "danger" ? #ff8b8b79 : #77b8ff82;
+                                    property <color> halo-edge: root.status-tone == "success" ? #3ccb7f1f : root.status-tone == "danger" ? #f06a6a1f : #4c9dff26;
+                                    x: -10px;
+                                    y: -10px;
+                                    width: 92px;
+                                    height: 92px;
+                                    border-radius: 46px;
+                                    clip: true;
+                                    opacity: power-touch.has-hover ? 1 : power-action.has-focus ? 0.84 : 0.08;
+                                    background: @radial-gradient(
+                                        circle 56px at cursor-x cursor-y,
+                                        halo-core 0%,
+                                        halo-edge 58%,
+                                        #00000000 100%
+                                    );
+                                    animate opacity { duration: 160ms; easing: ease-out; }
                                 }
 
                                 power-button := Rectangle {
@@ -602,7 +624,9 @@ export component AppWindow inherits Window {
                                     height: power-touch.pressed ? 69px : 72px;
                                     border-radius: self.width / 2;
                                     clip: true;
-                                    background: root.status-tone == "success" ? #3ccb7f20 : root.status-tone == "danger" ? #f06a6a1f : #4c9dff1c;
+                                    background: power-touch.has-hover || power-action.has-focus
+                                        ? (root.status-tone == "success" ? #3ccb7f4d : root.status-tone == "danger" ? #f06a6a4d : #4c9dff52)
+                                        : (root.status-tone == "success" ? #3ccb7f20 : root.status-tone == "danger" ? #f06a6a1f : #4c9dff1c);
                                     border-color: power-action.has-focus ? Theme.focus : root.status-tone == "success" ? Theme.accent-green : root.status-tone == "danger" ? Theme.error : Theme.accent-blue;
                                     border-width: power-action.has-focus ? Theme.focus-width : 1px;
                                     opacity: root.primary-enabled ? 1 : 0.45;
@@ -615,6 +639,44 @@ export component AppWindow inherits Window {
                                         source: root.service-logo;
                                         image-fit: contain;
                                         accessible-role: none;
+                                    }
+                                    power-mesh := Rectangle {
+                                        x: 0;
+                                        y: 0;
+                                        width: parent.width;
+                                        height: parent.height;
+                                        opacity: power-touch.has-hover ? 0.9 : power-action.has-focus ? 0.76 : 0;
+                                        background: transparent;
+                                        animate opacity { duration: 140ms; easing: ease-out; }
+
+                                        for _[button-grid-x] in 10: Rectangle {
+                                            x: button-grid-x * 8px - 4px;
+                                            width: 1px;
+                                            height: parent.height;
+                                            background: root.status-tone == "success" ? #b8ffd182 : root.status-tone == "danger" ? #ffd0d082 : #d1e7ff8f;
+                                        }
+                                        for _[button-grid-y] in 10: Rectangle {
+                                            y: button-grid-y * 8px - 4px;
+                                            width: parent.width;
+                                            height: 1px;
+                                            background: root.status-tone == "success" ? #b8ffd182 : root.status-tone == "danger" ? #ffd0d082 : #d1e7ff8f;
+                                        }
+                                    }
+                                    power-cursor-wash := Rectangle {
+                                        property <length> cursor-x: power-touch.has-hover ? power-touch.mouse-x : 36px;
+                                        property <length> cursor-y: power-touch.has-hover ? power-touch.mouse-y : 36px;
+                                        property <color> wash-core: root.status-tone == "success" ? #9affc75c : root.status-tone == "danger" ? #ffb1b15c : #a9d2ff66;
+                                        x: 0;
+                                        y: 0;
+                                        width: parent.width;
+                                        height: parent.height;
+                                        background: @radial-gradient(
+                                            circle 48px at cursor-x cursor-y,
+                                            wash-core 0%,
+                                            #00000000 100%
+                                        );
+                                        opacity: power-touch.has-hover ? 1 : power-action.has-focus ? 0.72 : 0;
+                                        animate opacity { duration: 140ms; easing: ease-out; }
                                     }
                                     if root.has-service-logo: Rectangle {
                                         x: parent.width - 26px;
