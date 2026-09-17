@@ -8,6 +8,8 @@ use std::{
         io::{AsRawHandle, FromRawHandle, OwnedHandle},
     },
     ptr,
+    sync::{Arc, Condvar, Mutex, OnceLock},
+    thread,
     time::Duration,
 };
 
@@ -21,7 +23,8 @@ use windows_sys::Win32::{
         ERROR_OPERATION_ABORTED, GetLastError, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT,
     },
     Storage::FileSystem::{
-        FILE_FLAG_OVERLAPPED, ReadFile, SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT, WriteFile,
+        FILE_FLAG_OVERLAPPED, ReadFile, SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT,
+        SYNCHRONIZE, WriteFile,
     },
     System::{
         IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED},
@@ -29,9 +32,12 @@ use windows_sys::Win32::{
             GetNamedPipeServerProcessId, PIPE_READMODE_MESSAGE, PIPE_WAIT, SetNamedPipeHandleState,
             WaitNamedPipeW,
         },
-        Threading::{CreateEventW, WaitForSingleObject},
+        Threading::{
+            CreateEventW, INFINITE, OpenProcess, WaitForMultipleObjects, WaitForSingleObject,
+        },
     },
 };
+use zeroize::Zeroizing;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const IO_TIMEOUT: Duration = Duration::from_secs(5);
@@ -60,7 +66,7 @@ pub(crate) fn run() -> Result<(), HostError> {
     write_message(pipe.as_raw_handle(), &authentication, IO_TIMEOUT)?;
 
     loop {
-        let frame = read_message(pipe.as_raw_handle(), IO_TIMEOUT)?;
+        let frame = read_message_until_peer_exit(pipe.as_raw_handle(), arguments.server_pid)?;
         let command = decode_command(&frame).map_err(|_| HostError::Protocol)?;
         let shutdown = command == ElevationCommand::Shutdown;
         let response = match command {
@@ -69,7 +75,7 @@ pub(crate) fn run() -> Result<(), HostError> {
                     code: BrokerErrorCode::NotReady,
                 }
             }
-            ElevationCommand::Stop { .. } => ElevationResponse::Stopped,
+            ElevationCommand::Stop { engine } => ElevationResponse::Stopped { engine },
             ElevationCommand::Diagnostics => ElevationResponse::Diagnostics {
                 xray_running: false,
                 mihomo_running: false,
@@ -163,7 +169,7 @@ fn verify_server_pid(pipe: &std::fs::File, expected: u32) -> Result<(), HostErro
     Ok(())
 }
 
-fn read_message(handle: HANDLE, timeout: Duration) -> Result<Vec<u8>, HostError> {
+fn read_message(handle: HANDLE, timeout: Duration) -> Result<Zeroizing<Vec<u8>>, HostError> {
     let mut pending = PendingIo::with_buffer(vec![0_u8; MAX_ELEVATION_FRAME_BYTES])?;
     let mut transferred = 0;
     let started = unsafe {
@@ -190,6 +196,72 @@ fn read_message(handle: HANDLE, timeout: Duration) -> Result<Vec<u8>, HostError>
     let mut buffer = pending.take_buffer();
     buffer.truncate(transferred as usize);
     Ok(buffer)
+}
+
+fn read_message_until_peer_exit(
+    handle: HANDLE,
+    server_pid: u32,
+) -> Result<Zeroizing<Vec<u8>>, HostError> {
+    let server = unsafe { OpenProcess(SYNCHRONIZE, 0, server_pid) };
+    if server.is_null() {
+        return Err(HostError::PeerPidMismatch);
+    }
+    let server = unsafe { OwnedHandle::from_raw_handle(server) };
+    let mut pending = PendingIo::with_buffer(vec![0_u8; MAX_ELEVATION_FRAME_BYTES])?;
+    let mut transferred = 0;
+    let started = unsafe {
+        ReadFile(
+            handle,
+            pending.buffer_mut().as_mut_ptr(),
+            MAX_ELEVATION_FRAME_BYTES as u32,
+            &mut transferred,
+            pending.overlapped_mut(),
+        )
+    };
+    if started == 0 {
+        let error = unsafe { GetLastError() };
+        match error {
+            ERROR_MORE_DATA => return Err(HostError::Protocol),
+            ERROR_BROKEN_PIPE | ERROR_NO_DATA => return Err(HostError::Disconnected),
+            ERROR_IO_PENDING => {
+                let handles = [pending.event_handle(), server.as_raw_handle()];
+                match unsafe { WaitForMultipleObjects(2, handles.as_ptr(), 0, INFINITE) } {
+                    WAIT_OBJECT_0 => {
+                        transferred = complete_pending(handle, &mut pending)?;
+                    }
+                    value if value == WAIT_OBJECT_0 + 1 => {
+                        pending.cancel_and_drain(handle);
+                        return Err(HostError::Disconnected);
+                    }
+                    _ => {
+                        pending.cancel_and_drain(handle);
+                        return Err(HostError::Io);
+                    }
+                }
+            }
+            _ => return Err(HostError::Io),
+        }
+    }
+    if transferred == 0 {
+        return Err(HostError::Disconnected);
+    }
+    let mut buffer = pending.take_buffer();
+    buffer.truncate(transferred as usize);
+    Ok(buffer)
+}
+
+fn complete_pending(handle: HANDLE, pending: &mut PendingIo) -> Result<u32, HostError> {
+    let mut transferred = 0;
+    if unsafe { GetOverlappedResult(handle, pending.overlapped_mut(), &mut transferred, 0) } == 0 {
+        let error = unsafe { GetLastError() };
+        return match error {
+            ERROR_MORE_DATA => Err(HostError::Protocol),
+            ERROR_BROKEN_PIPE | ERROR_NO_DATA => Err(HostError::Disconnected),
+            ERROR_OPERATION_ABORTED => Err(HostError::TimedOut),
+            _ => Err(HostError::Io),
+        };
+    }
+    Ok(transferred)
 }
 
 fn write_message<T: serde::Serialize>(
@@ -231,21 +303,7 @@ fn wait_pending(
 ) -> Result<u32, HostError> {
     let milliseconds = timeout.as_millis().min(u32::MAX as u128) as u32;
     match unsafe { WaitForSingleObject(pending.event_handle(), milliseconds) } {
-        WAIT_OBJECT_0 => {
-            let mut transferred = 0;
-            if unsafe { GetOverlappedResult(handle, pending.overlapped_mut(), &mut transferred, 0) }
-                == 0
-            {
-                let error = unsafe { GetLastError() };
-                return match error {
-                    ERROR_MORE_DATA => Err(HostError::Protocol),
-                    ERROR_BROKEN_PIPE | ERROR_NO_DATA => Err(HostError::Disconnected),
-                    ERROR_OPERATION_ABORTED => Err(HostError::TimedOut),
-                    _ => Err(HostError::Io),
-                };
-            }
-            Ok(transferred)
-        }
+        WAIT_OBJECT_0 => complete_pending(handle, pending),
         WAIT_TIMEOUT => {
             pending.cancel_and_drain(handle);
             Err(HostError::TimedOut)
@@ -260,11 +318,12 @@ fn wait_pending(
 struct PendingIo {
     overlapped: Option<Box<OVERLAPPED>>,
     event: Option<OwnedHandle>,
-    buffer: Option<Vec<u8>>,
+    buffer: Option<Zeroizing<Vec<u8>>>,
 }
 
 impl PendingIo {
     fn with_buffer(buffer: Vec<u8>) -> Result<Self, HostError> {
+        let buffer = Zeroizing::new(buffer);
         let handle = unsafe { CreateEventW(ptr::null(), 1, 0, ptr::null()) };
         if handle.is_null() {
             return Err(HostError::Io);
@@ -300,7 +359,7 @@ impl PendingIo {
             .expect("pending I/O buffer is live")
     }
 
-    fn take_buffer(&mut self) -> Vec<u8> {
+    fn take_buffer(&mut self) -> Zeroizing<Vec<u8>> {
         self.buffer.take().expect("pending I/O buffer is live")
     }
 
@@ -313,16 +372,109 @@ impl PendingIo {
                 GetOverlappedResult(handle, self.overlapped_mut(), &mut ignored, 0);
             }
         } else {
-            Box::leak(self.overlapped.take().expect("pending I/O is live"));
-            std::mem::forget(self.event.take().expect("pending I/O event is live"));
-            std::mem::forget(self.buffer.take().expect("pending I/O buffer is live"));
+            cancellation_reaper().retain(RetainedOperation {
+                _overlapped: self.overlapped.take().expect("pending I/O is live"),
+                event: self.event.take().expect("pending I/O event is live"),
+                _buffer: self.buffer.take().expect("pending I/O buffer is live"),
+            });
         }
     }
+}
+
+struct RetainedOperation {
+    _overlapped: Box<OVERLAPPED>,
+    event: OwnedHandle,
+    _buffer: Zeroizing<Vec<u8>>,
+}
+
+// SAFETY: the reaper only retains stable allocations and observes the kernel event.
+unsafe impl Send for RetainedOperation {}
+
+struct CancellationReaper {
+    queue: Mutex<Vec<RetainedOperation>>,
+    changed: Condvar,
+}
+
+impl CancellationReaper {
+    fn retain(&self, operation: RetainedOperation) {
+        let mut queue = self
+            .queue
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        while queue.len() >= 64 {
+            queue = self
+                .changed
+                .wait_timeout(queue, Duration::from_millis(50))
+                .unwrap_or_else(|poison| poison.into_inner())
+                .0;
+        }
+        queue.push(operation);
+        self.changed.notify_all();
+    }
+
+    fn run(&self) {
+        loop {
+            let mut queue = self
+                .queue
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            while queue.is_empty() {
+                queue = self
+                    .changed
+                    .wait(queue)
+                    .unwrap_or_else(|poison| poison.into_inner());
+            }
+            queue.retain(|operation| {
+                (unsafe { WaitForSingleObject(operation.event.as_raw_handle(), 0) })
+                    != WAIT_OBJECT_0
+            });
+            self.changed.notify_all();
+            drop(queue);
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+}
+
+fn cancellation_reaper() -> &'static Arc<CancellationReaper> {
+    static REAPER: OnceLock<Arc<CancellationReaper>> = OnceLock::new();
+    REAPER.get_or_init(|| {
+        let reaper = Arc::new(CancellationReaper {
+            queue: Mutex::new(Vec::new()),
+            changed: Condvar::new(),
+        });
+        let worker = Arc::clone(&reaper);
+        if thread::Builder::new()
+            .name("multicore-host-pipe-cancel-reaper".into())
+            .spawn(move || worker.run())
+            .is_err()
+        {
+            // Unwinding would free buffers still referenced by the kernel.
+            std::process::abort();
+        }
+        reaper
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use multicore_core::elevation_protocol::SessionSecret;
+    use std::{
+        io::{Read, Write},
+        os::windows::io::FromRawHandle,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+    use windows_sys::Win32::{
+        Foundation::{ERROR_PIPE_CONNECTED, GetLastError, INVALID_HANDLE_VALUE},
+        Storage::FileSystem::PIPE_ACCESS_DUPLEX,
+        System::{
+            Pipes::{
+                ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeClientProcessId,
+                PIPE_READMODE_MESSAGE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_MESSAGE, PIPE_WAIT,
+            },
+            Threading::GetCurrentProcessId,
+        },
+    };
 
     #[test]
     fn accepts_only_generated_pipe_names() {
@@ -333,5 +485,95 @@ mod tests {
         assert!(!is_generated_pipe_name(
             r"\\.\pipe\MultiCore.Elevation.v1.0123456789abcdef0123456789abcdef0123456789abcde/"
         ));
+    }
+
+    #[test]
+    fn authenticated_host_accepts_command_after_old_idle_timeout() {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let suffix = format!(
+            "{:048x}",
+            (u128::from(unsafe { GetCurrentProcessId() }) << 64)
+                | u128::from(NEXT.fetch_add(1, Ordering::Relaxed))
+        );
+        let name = format!(r"\\.\pipe\MultiCore.Elevation.v1.{suffix}");
+        let wide = OsStr::new(&name)
+            .encode_wide()
+            .chain(Some(0))
+            .collect::<Vec<_>>();
+        let raw_server = unsafe {
+            CreateNamedPipeW(
+                wide.as_ptr(),
+                PIPE_ACCESS_DUPLEX,
+                PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+                1,
+                MAX_ELEVATION_FRAME_BYTES as u32,
+                MAX_ELEVATION_FRAME_BYTES as u32,
+                0,
+                ptr::null(),
+            )
+        };
+        assert_ne!(raw_server, INVALID_HANDLE_VALUE);
+        let client_name = name.clone();
+        let server_pid = unsafe { GetCurrentProcessId() };
+        let client = thread::spawn(move || {
+            let pipe = connect(&client_name, Duration::from_secs(2)).unwrap();
+            verify_server_pid(&pipe, server_pid).unwrap();
+            let auth_frame = read_message(pipe.as_raw_handle(), Duration::from_secs(2)).unwrap();
+            let authentication: Authentication = decode_frame(&auth_frame).unwrap();
+            write_message(
+                pipe.as_raw_handle(),
+                &authentication,
+                Duration::from_secs(2),
+            )
+            .unwrap();
+            let command_frame =
+                read_message_until_peer_exit(pipe.as_raw_handle(), server_pid).unwrap();
+            let command = decode_command(&command_frame).unwrap();
+            assert_eq!(command, ElevationCommand::Diagnostics);
+            write_message(
+                pipe.as_raw_handle(),
+                &ElevationResponse::Diagnostics {
+                    xray_running: false,
+                    mihomo_running: false,
+                },
+                Duration::from_secs(2),
+            )
+            .unwrap();
+        });
+        let connected = unsafe { ConnectNamedPipe(raw_server, ptr::null_mut()) };
+        assert!(connected != 0 || unsafe { GetLastError() } == ERROR_PIPE_CONNECTED);
+        let mut client_pid = 0;
+        assert_ne!(
+            unsafe { GetNamedPipeClientProcessId(raw_server, &mut client_pid) },
+            0
+        );
+        assert_eq!(client_pid, unsafe { GetCurrentProcessId() });
+        let mut server = unsafe { std::fs::File::from_raw_handle(raw_server) };
+
+        let auth = SessionSecret::from_bytes([23; 32]).authentication();
+        server.write_all(&encode_frame(&auth).unwrap()).unwrap();
+        server.flush().unwrap();
+        let mut frame = vec![0_u8; MAX_ELEVATION_FRAME_BYTES];
+        let read = server.read(&mut frame).unwrap();
+        frame.truncate(read);
+        let echoed: Authentication = decode_frame(&frame).unwrap();
+        assert!(SessionSecret::from_bytes([23; 32]).verifies(&echoed));
+
+        thread::sleep(Duration::from_millis(5_200));
+        server
+            .write_all(&encode_frame(&ElevationCommand::Diagnostics).unwrap())
+            .unwrap();
+        server.flush().unwrap();
+        let mut frame = vec![0_u8; MAX_ELEVATION_FRAME_BYTES];
+        let read = server.read(&mut frame).unwrap();
+        frame.truncate(read);
+        assert_eq!(
+            decode_frame::<ElevationResponse>(&frame).unwrap(),
+            ElevationResponse::Diagnostics {
+                xray_running: false,
+                mihomo_running: false
+            }
+        );
+        client.join().unwrap();
     }
 }

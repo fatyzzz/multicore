@@ -4,6 +4,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
+use zeroize::Zeroizing;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 pub const ELEVATION_PROTOCOL_VERSION: u16 = 1;
 /// Hard limit for the complete pipe message, including its four-byte length prefix.
@@ -53,8 +55,12 @@ pub enum BrokerErrorCode {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum ElevationResponse {
-    Authenticated,
-    Stopped,
+    Started {
+        engine: ElevatedEngine,
+    },
+    Stopped {
+        engine: ElevatedEngine,
+    },
     Diagnostics {
         xray_running: bool,
         mihomo_running: bool,
@@ -65,7 +71,7 @@ pub enum ElevationResponse {
     },
 }
 
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Eq, PartialEq, Zeroize, ZeroizeOnDrop)]
 pub struct SessionSecret([u8; SESSION_SECRET_BYTES]);
 
 impl SessionSecret {
@@ -103,7 +109,7 @@ impl fmt::Debug for SessionSecret {
     }
 }
 
-#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Deserialize, Eq, PartialEq, Serialize, Zeroize, ZeroizeOnDrop)]
 #[serde(deny_unknown_fields)]
 pub struct Authentication {
     secret: [u8; SESSION_SECRET_BYTES],
@@ -141,11 +147,13 @@ struct Envelope<T> {
 }
 
 pub fn encode_frame<T: Serialize>(value: &T) -> Result<Vec<u8>, ProtocolError> {
-    let payload = serde_json::to_vec(&Envelope {
-        version: ELEVATION_PROTOCOL_VERSION,
-        body: value,
-    })
-    .map_err(|_| ProtocolError::InvalidSchema)?;
+    let payload = Zeroizing::new(
+        serde_json::to_vec(&Envelope {
+            version: ELEVATION_PROTOCOL_VERSION,
+            body: value,
+        })
+        .map_err(|_| ProtocolError::InvalidSchema)?,
+    );
     if payload.is_empty() || payload.len() > MAX_ELEVATION_FRAME_BYTES - 4 {
         return Err(ProtocolError::InvalidLength);
     }
@@ -189,4 +197,32 @@ pub fn decode_command(frame: &[u8]) -> Result<ElevationCommand, ProtocolError> {
     let command: ElevationCommand = decode_frame(frame)?;
     command.validate()?;
     Ok(command)
+}
+
+#[must_use]
+pub fn response_matches_command(command: &ElevationCommand, response: &ElevationResponse) -> bool {
+    if matches!(response, ElevationResponse::Error { .. }) {
+        return true;
+    }
+    match (command, response) {
+        (
+            ElevationCommand::StartXray { .. },
+            ElevationResponse::Started {
+                engine: ElevatedEngine::Xray,
+            },
+        ) => true,
+        (
+            ElevationCommand::StartMihomo { .. },
+            ElevationResponse::Started {
+                engine: ElevatedEngine::Mihomo,
+            },
+        ) => true,
+        (
+            ElevationCommand::Stop { engine: expected },
+            ElevationResponse::Stopped { engine: actual },
+        ) if expected == actual => true,
+        (ElevationCommand::Diagnostics, ElevationResponse::Diagnostics { .. })
+        | (ElevationCommand::Shutdown, ElevationResponse::ShuttingDown) => true,
+        _ => false,
+    }
 }

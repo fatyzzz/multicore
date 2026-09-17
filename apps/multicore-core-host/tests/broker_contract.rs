@@ -1,6 +1,10 @@
 const HOST_MAIN: &str = include_str!("../src/main.rs");
 const WINDOWS_PIPE: &str = include_str!("../src/windows_pipe.rs");
 
+#[path = "../src/windows_pipe.rs"]
+#[allow(dead_code)]
+mod windows_pipe;
+
 #[test]
 fn host_command_line_and_diagnostics_never_carry_secrets_or_configs() {
     for forbidden in [
@@ -37,6 +41,7 @@ fn windows_transport_is_bounded_overlapped_and_peer_authenticated() {
         WINDOWS_PIPE.find("verify_server_pid").unwrap()
             < WINDOWS_PIPE.find("authentication_frame").unwrap()
     );
-    assert!(WINDOWS_PIPE.contains("std::mem::forget(self.buffer.take()"));
+    assert!(WINDOWS_PIPE.contains("CancellationReaper"));
+    assert!(!WINDOWS_PIPE.contains("Box::leak"));
     assert!(!WINDOWS_PIPE.contains("Err(HostError::TimedOut) => continue"));
 }

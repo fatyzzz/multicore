@@ -3,8 +3,9 @@ use std::{fmt, path::Path, time::Duration};
 #[cfg(test)]
 use multicore_core::elevation_protocol::BrokerErrorCode;
 use multicore_core::elevation_protocol::{
-    Authentication, ElevationCommand, ElevationResponse, SessionSecret,
+    Authentication, ElevationCommand, ElevationResponse, SessionSecret, response_matches_command,
 };
+use zeroize::Zeroizing;
 
 pub const BROKER_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 pub const BROKER_IO_TIMEOUT: Duration = Duration::from_secs(5);
@@ -121,7 +122,7 @@ impl BrokerSession {
                 mihomo_running: false,
             },
             ElevationCommand::Shutdown => ElevationResponse::ShuttingDown,
-            ElevationCommand::Stop { .. } => ElevationResponse::Stopped,
+            ElevationCommand::Stop { engine } => ElevationResponse::Stopped { engine: *engine },
             ElevationCommand::StartXray { .. } | ElevationCommand::StartMihomo { .. } => {
                 ElevationResponse::Error {
                     code: BrokerErrorCode::NotReady,
@@ -165,9 +166,10 @@ pub mod windows {
         },
         ptr,
         sync::{
-            Mutex,
+            Arc, Condvar, Mutex, OnceLock,
             atomic::{AtomicBool, Ordering},
         },
+        thread,
         time::Instant,
     };
     use windows_sys::Win32::{
@@ -391,7 +393,14 @@ pub mod windows {
             };
             let result = write_message(pipe.as_raw_handle(), command, BROKER_IO_TIMEOUT, cancelled)
                 .and_then(|()| read_message(pipe.as_raw_handle(), BROKER_IO_TIMEOUT, cancelled))
-                .and_then(|frame| decode_frame(&frame).map_err(|_| ElevationError::Protocol));
+                .and_then(|frame| decode_frame(&frame).map_err(|_| ElevationError::Protocol))
+                .and_then(|response| {
+                    if response_matches_command(command, &response) {
+                        Ok(response)
+                    } else {
+                        Err(ElevationError::Protocol)
+                    }
+                });
             if result.is_err() {
                 handle.take();
                 self.terminal.store(true, Ordering::Release);
@@ -519,7 +528,7 @@ pub mod windows {
         handle: HANDLE,
         timeout: Duration,
         cancelled: &AtomicBool,
-    ) -> Result<Vec<u8>, ElevationError> {
+    ) -> Result<Zeroizing<Vec<u8>>, ElevationError> {
         let mut pending = PendingIo::with_buffer(vec![0_u8; MAX_ELEVATION_FRAME_BYTES])?;
         let mut transferred = 0;
         let started = unsafe {
@@ -646,7 +655,7 @@ pub mod windows {
     struct PendingIo {
         overlapped: Option<Box<OVERLAPPED>>,
         event: Option<OwnedHandle>,
-        buffer: Option<Vec<u8>>,
+        buffer: Option<Zeroizing<Vec<u8>>>,
     }
 
     impl PendingIo {
@@ -655,6 +664,7 @@ pub mod windows {
         }
 
         fn with_buffer(buffer: Vec<u8>) -> Result<Self, ElevationError> {
+            let buffer = Zeroizing::new(buffer);
             let handle = unsafe { CreateEventW(ptr::null(), 1, 0, ptr::null()) };
             if handle.is_null() {
                 return Err(ElevationError::Io);
@@ -690,7 +700,7 @@ pub mod windows {
                 .expect("pending I/O buffer is live")
         }
 
-        fn take_buffer(&mut self) -> Vec<u8> {
+        fn take_buffer(&mut self) -> Zeroizing<Vec<u8>> {
             self.buffer.take().expect("pending I/O buffer is live")
         }
 
@@ -704,13 +714,105 @@ pub mod windows {
                     GetOverlappedResult(handle, self.overlapped_mut(), &mut ignored, 0);
                 }
             } else {
-                // A pathological kernel/driver delay must not turn into a use-after-free. Keep
-                // the stable OVERLAPPED and event alive; closing the pipe later completes it.
-                Box::leak(self.overlapped.take().expect("pending I/O is live"));
-                std::mem::forget(self.event.take().expect("pending I/O event is live"));
-                std::mem::forget(self.buffer.take().expect("pending I/O buffer is live"));
+                cancellation_reaper().retain(RetainedOperation {
+                    _overlapped: self.overlapped.take().expect("pending I/O is live"),
+                    event: self.event.take().expect("pending I/O event is live"),
+                    _buffer: self.buffer.take().expect("pending I/O buffer is live"),
+                });
             }
         }
+    }
+
+    struct RetainedOperation {
+        _overlapped: Box<OVERLAPPED>,
+        event: OwnedHandle,
+        _buffer: Zeroizing<Vec<u8>>,
+    }
+
+    // SAFETY: the reaper never dereferences OVERLAPPED or its buffer; it only keeps their stable
+    // allocations alive until the kernel signals the owned event.
+    unsafe impl Send for RetainedOperation {}
+
+    struct CancellationReaper {
+        queue: Mutex<Vec<RetainedOperation>>,
+        changed: Condvar,
+    }
+
+    impl CancellationReaper {
+        fn retain(&self, operation: RetainedOperation) {
+            let mut queue = self
+                .queue
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            while queue.len() >= 64 {
+                queue = self
+                    .changed
+                    .wait_timeout(queue, Duration::from_millis(50))
+                    .unwrap_or_else(|poison| poison.into_inner())
+                    .0;
+            }
+            queue.push(operation);
+            self.changed.notify_all();
+        }
+
+        fn run(&self) {
+            loop {
+                let mut queue = self
+                    .queue
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner());
+                while queue.is_empty() {
+                    queue = self
+                        .changed
+                        .wait(queue)
+                        .unwrap_or_else(|poison| poison.into_inner());
+                }
+                queue.retain(|operation| {
+                    (unsafe { WaitForSingleObject(operation.event.as_raw_handle(), 0) })
+                        != WAIT_OBJECT_0
+                });
+                self.changed.notify_all();
+                drop(queue);
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+
+        #[cfg(test)]
+        fn wait_empty(&self, timeout: Duration) -> bool {
+            let deadline = Instant::now() + timeout;
+            let mut queue = self
+                .queue
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            while !queue.is_empty() && Instant::now() < deadline {
+                queue = self
+                    .changed
+                    .wait_timeout(queue, Duration::from_millis(10))
+                    .unwrap_or_else(|poison| poison.into_inner())
+                    .0;
+            }
+            queue.is_empty()
+        }
+    }
+
+    fn cancellation_reaper() -> &'static Arc<CancellationReaper> {
+        static REAPER: OnceLock<Arc<CancellationReaper>> = OnceLock::new();
+        REAPER.get_or_init(|| {
+            let reaper = Arc::new(CancellationReaper {
+                queue: Mutex::new(Vec::new()),
+                changed: Condvar::new(),
+            });
+            let worker = Arc::clone(&reaper);
+            if thread::Builder::new()
+                .name("multicore-pipe-cancel-reaper".into())
+                .spawn(move || worker.run())
+                .is_err()
+            {
+                // Unwinding would free buffers still referenced by the kernel.
+                std::process::abort();
+            }
+            reaper
+        })
     }
 
     fn os_str_contains_nul(value: &OsStr) -> bool {
@@ -869,6 +971,34 @@ pub mod windows {
                 ),
                 Err(ElevationError::Cancelled)
             );
+
+            for _ in 0..16 {
+                let server = NamedPipeServer::create().unwrap();
+                let cancelled = AtomicBool::new(true);
+                assert_eq!(
+                    connect_overlapped(
+                        server.handle.as_raw_handle(),
+                        Duration::from_secs(1),
+                        &cancelled,
+                    ),
+                    Err(ElevationError::Cancelled)
+                );
+            }
+            for _ in 0..16 {
+                let mut pending = PendingIo::with_buffer(vec![0x5a; 32]).unwrap();
+                assert_ne!(
+                    unsafe {
+                        windows_sys::Win32::System::Threading::SetEvent(pending.event_handle())
+                    },
+                    0
+                );
+                cancellation_reaper().retain(RetainedOperation {
+                    _overlapped: pending.overlapped.take().unwrap(),
+                    event: pending.event.take().unwrap(),
+                    _buffer: pending.buffer.take().unwrap(),
+                });
+            }
+            assert!(cancellation_reaper().wait_empty(Duration::from_secs(2)));
         }
 
         #[test]
@@ -988,7 +1118,10 @@ pub mod windows {
             let server = NamedPipeServer::create().unwrap();
             let client = spawn_protocol_client(server.name.clone(), |handle, cancelled| {
                 let _ = read_message(handle, Duration::from_secs(2), cancelled).unwrap();
-                let mut trailing = encode_frame(&ElevationResponse::Stopped).unwrap();
+                let mut trailing = encode_frame(&ElevationResponse::Stopped {
+                    engine: multicore_core::elevation_protocol::ElevatedEngine::Xray,
+                })
+                .unwrap();
                 trailing.push(0);
                 write_raw_message(handle, trailing, Duration::from_secs(2), cancelled).unwrap();
             });
@@ -1030,6 +1163,45 @@ pub mod windows {
                 Err(ElevationError::Protocol)
             );
             assert!(pipe.is_terminal());
+            client.join().unwrap();
+        }
+
+        #[test]
+        fn semantically_mismatched_response_terminally_poison_transport() {
+            let server = NamedPipeServer::create().unwrap();
+            let client = spawn_protocol_client(server.name.clone(), |handle, cancelled| {
+                let _ = read_message(handle, Duration::from_secs(2), cancelled).unwrap();
+                write_message(
+                    handle,
+                    &ElevationResponse::Diagnostics {
+                        xray_running: false,
+                        mihomo_running: false,
+                    },
+                    Duration::from_secs(2),
+                    cancelled,
+                )
+                .unwrap();
+            });
+            let cancelled = AtomicBool::new(false);
+            let pipe = server
+                .authenticate(
+                    current_process_host(),
+                    &SessionSecret::from_bytes([12; 32]),
+                    &cancelled,
+                )
+                .unwrap();
+            assert_eq!(
+                pipe.request(
+                    &ElevationCommand::StartXray { generation_id: 1 },
+                    &cancelled,
+                ),
+                Err(ElevationError::Protocol)
+            );
+            assert!(pipe.is_terminal());
+            assert_eq!(
+                pipe.request(&ElevationCommand::Diagnostics, &cancelled),
+                Err(ElevationError::Disconnected)
+            );
             client.join().unwrap();
         }
 
@@ -1082,7 +1254,9 @@ mod tests {
             session.command(&ElevationCommand::Stop {
                 engine: ElevatedEngine::Xray
             }),
-            ElevationResponse::Stopped
+            ElevationResponse::Stopped {
+                engine: ElevatedEngine::Xray
+            }
         );
         assert_eq!(session.eof(), Err(ElevationError::Disconnected));
         assert!(session.is_closed());

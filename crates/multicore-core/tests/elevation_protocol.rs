@@ -1,6 +1,7 @@
 use multicore_core::elevation_protocol::{
-    ElevationCommand, ElevationResponse, MAX_ELEVATION_FRAME_BYTES, ProtocolError, SessionSecret,
-    decode_command, decode_frame, encode_frame,
+    BrokerErrorCode, ElevatedEngine, ElevationCommand, ElevationResponse,
+    MAX_ELEVATION_FRAME_BYTES, ProtocolError, SessionSecret, decode_command, decode_frame,
+    encode_frame, response_matches_command,
 };
 
 fn raw(payload: &[u8]) -> Vec<u8> {
@@ -81,6 +82,67 @@ fn responses_also_use_an_exact_bounded_schema() {
         decode_frame::<ElevationResponse>(&extra),
         Err(ProtocolError::InvalidSchema)
     );
+}
+
+#[test]
+fn every_response_is_paired_with_its_originating_command() {
+    let cases = [
+        (
+            ElevationCommand::StartXray { generation_id: 1 },
+            ElevationResponse::Started {
+                engine: ElevatedEngine::Xray,
+            },
+            ElevationResponse::Started {
+                engine: ElevatedEngine::Mihomo,
+            },
+        ),
+        (
+            ElevationCommand::StartMihomo { generation_id: 1 },
+            ElevationResponse::Started {
+                engine: ElevatedEngine::Mihomo,
+            },
+            ElevationResponse::Started {
+                engine: ElevatedEngine::Xray,
+            },
+        ),
+        (
+            ElevationCommand::Stop {
+                engine: ElevatedEngine::Xray,
+            },
+            ElevationResponse::Stopped {
+                engine: ElevatedEngine::Xray,
+            },
+            ElevationResponse::Stopped {
+                engine: ElevatedEngine::Mihomo,
+            },
+        ),
+        (
+            ElevationCommand::Diagnostics,
+            ElevationResponse::Diagnostics {
+                xray_running: false,
+                mihomo_running: false,
+            },
+            ElevationResponse::ShuttingDown,
+        ),
+        (
+            ElevationCommand::Shutdown,
+            ElevationResponse::ShuttingDown,
+            ElevationResponse::Diagnostics {
+                xray_running: false,
+                mihomo_running: false,
+            },
+        ),
+    ];
+    for (command, valid, mismatch) in cases {
+        assert!(response_matches_command(&command, &valid));
+        assert!(!response_matches_command(&command, &mismatch));
+        assert!(response_matches_command(
+            &command,
+            &ElevationResponse::Error {
+                code: BrokerErrorCode::NotReady
+            }
+        ));
+    }
 }
 
 #[test]

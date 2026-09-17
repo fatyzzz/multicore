@@ -15,6 +15,7 @@ bench = false
 [dependencies]
 multicore-core = { path = "../../crates/multicore-core" }
 serde.workspace = true
+zeroize.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
