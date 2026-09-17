@@ -44,6 +44,8 @@
 - [x] Treat pipe EOF as a mandatory cleanup signal and UAC cancellation as `ElevationCancelled`.
 - [x] Run protocol tests, Clippy with warnings denied, and leak scans over command lines/log fixtures.
 
+Task 2 review evidence: spec and quality reviews passed at `82c514d`; actual UAC/cross-integrity smoke remains in Task 5.
+
 ### Task 3: Move Xray and Mihomo ownership into the elevated host
 
 **Files:**
