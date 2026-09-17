@@ -3781,16 +3781,43 @@ mod tests {
         assert!(pill_mesh.contains("width: parent.width;"));
         assert!(pill_mesh.contains("height: parent.height;"));
         assert!(pill_mesh.contains("strip-glow-touch.has-hover"));
-        assert!(source.contains("connection-strip.power-cursor-x = power-action.x + self.mouse-x"));
-        assert!(source.contains("connection-strip.power-cursor-y = power-action.y + self.mouse-y"));
-        assert!(source.contains("connection-strip.power-hover = self.has-hover"));
-        assert!(source.contains("@radial-gradient("));
-        assert!(source.contains("circle 240px at cursor-x cursor-y"));
-        assert!(source.contains("for _[grid-x] in 100"));
-        assert!(source.contains("for _[grid-y] in 13"));
+        assert!(pill_mesh.contains("property <length> cursor-x: strip-glow-touch.mouse-x"));
+        assert!(pill_mesh.contains("property <length> cursor-y: strip-glow-touch.mouse-y"));
+        assert!(!connection_strip.contains("power-touch := TouchArea"));
+        assert!(!connection_strip.contains("power-hover"));
+        assert!(!connection_strip.contains("power-cursor-x"));
+        assert!(!connection_strip.contains("power-cursor-y"));
+        assert_eq!(
+            connection_strip
+                .matches("strip-glow-touch := TouchArea")
+                .count(),
+            1
+        );
+        assert!(connection_strip.contains("width: root.has-profile ? parent.width : 0px;"));
+        assert!(connection_strip.contains("height: root.has-profile ? parent.height : 0px;"));
+        assert!(connection_strip.contains("if (root.primary-enabled)"));
+        assert!(connection_strip.contains("root.primary-action();"));
+        assert!(connection_strip.contains("strip-glow-touch.pressed"));
+        assert!(pill_mesh.contains("opacity: self.active ? 1 : 0;"));
+        assert!(!pill_mesh.contains("opacity: self.active ? 1 : 0.1;"));
+        assert!(!source.contains("cursor-glow-field := Rectangle"));
+        assert!(!source.contains("glow-x"));
+        assert!(!source.contains("circle 176px at glow-x glow-y"));
+        assert!(pill_mesh.contains("circle 160px at cursor-x cursor-y"));
+        assert!(pill_mesh.contains("glow-strong 0%"));
+        assert!(pill_mesh.contains("glow-medium 26%"));
+        assert!(pill_mesh.contains("glow-soft 52%"));
+        assert!(source.contains("mesh-clip := Rectangle"));
+        assert!(source.contains("for _[grid-x] in 120"));
+        assert!(source.contains("for _[grid-cell-y] in 12"));
+        assert!(source.contains("property <float> distance: Math.sqrt("));
+        assert!(source.contains("border-width: 0.5px;"));
+        assert!(source.contains("signal-mesh-field.active ? Math.max(0, 1 - self.distance) : 0"));
         assert!(source.contains("grid-line-strong"));
-        assert!(source.contains("background: signal-mesh-field.grid-line-strong;"));
-        assert!(source.contains("#66e8a632"));
+        assert!(source.contains("border-color: signal-mesh-field.grid-line-strong;"));
+        assert!(source.contains("#8ea39770"));
+        assert!(!source.contains("144px * self.reveal"));
+        assert!(!source.contains("352px * self.reveal"));
         assert!(source.contains("#0d1814f0"));
         assert!(!source.contains("connect-halo := Rectangle"));
         assert!(!source.contains("power-cursor-wash := Rectangle"));
@@ -4340,7 +4367,9 @@ mod tests {
         assert!(capture_helper.contains("public static void ClickClient"));
         assert!(capture_helper.contains("public static void MoveClient"));
         assert!(capture_helper.contains("if ($HoverConnection)"));
+        assert!(capture_helper.contains("Move-Preview $handle 300 112"));
         assert!(capture_helper.contains("PostMessage(window, 0x0201"));
+        assert!(!capture_helper.contains("PostMessage(window, 0x02A1"));
         assert!(click_helper.contains("[PreviewWindow]::ClickClient($Handle, $ClientX, $ClientY)"));
         assert!(!capture_helper.contains("mouse_event"));
         assert!(

@@ -524,9 +524,6 @@ export component AppWindow inherits Window {
                     spacing: 10px;
 
                     connection-strip := Rectangle {
-                        property <bool> power-hover: false;
-                        property <length> power-cursor-x: self.width / 2;
-                        property <length> power-cursor-y: self.height / 2;
                         height: 96px;
                         background: root.status-tone == "success" ? #3ccb7f0b : root.status-tone == "danger" ? #f06a6a0a : #4c9dff09;
                         border-color: root.status-tone == "success" ? #3ccb7f66 : root.status-tone == "danger" ? #f06a6a66 : #4c9dff55;
@@ -534,51 +531,64 @@ export component AppWindow inherits Window {
                         border-radius: 18px;
                         clip: true;
 
-                        // One continuous signal field belongs to the complete connection pill.
-                        // The controls and copy are deliberately rendered above it.
-                        signal-mesh-field := Rectangle {
-                            property <bool> active: strip-glow-touch.has-hover || connection-strip.power-hover;
-                            property <length> cursor-x: strip-glow-touch.has-hover
-                                ? strip-glow-touch.mouse-x
-                                : connection-strip.power-cursor-x;
-                            property <length> cursor-y: strip-glow-touch.has-hover
-                                ? strip-glow-touch.mouse-y
-                                : connection-strip.power-cursor-y;
-                            property <color> glow-strong: root.status-tone == "success" ? #3ccb7f91 : root.status-tone == "danger" ? #f06a6a91 : #4c9dff99;
-                            property <color> glow-soft: root.status-tone == "success" ? #3ccb7f35 : root.status-tone == "danger" ? #f06a6a35 : #4c9dff3d;
-                            property <color> grid-line-strong: root.status-tone == "success" ? #66e8a632 : root.status-tone == "danger" ? #ff8b8b32 : #77b8ff36;
+                        // Only the cell mesh reacts to hover. An outer halo would be clipped by
+                        // the main-content plane and read as a rectangular light patch.
+                        mesh-clip := Rectangle {
                             x: 0;
                             y: 0;
                             width: parent.width;
                             height: parent.height;
-                            opacity: self.active ? 1 : 0.1;
-                            background: @radial-gradient(
-                                circle 240px at cursor-x cursor-y,
-                                glow-strong 0%,
-                                glow-soft 48%,
-                                #00000000 100%
-                            );
-                            animate opacity { duration: 180ms; easing: ease-out; }
+                            border-radius: 18px;
+                            clip: true;
+                            background: transparent;
 
-                            for _[grid-x] in 100: Rectangle {
-                                x: grid-x * 8px;
-                                width: 1px;
-                                height: parent.height;
-                                background: signal-mesh-field.grid-line-strong;
-                            }
-                            for _[grid-y] in 13: Rectangle {
-                                y: grid-y * 8px;
+                            signal-mesh-field := Rectangle {
+                                property <bool> active: strip-glow-touch.has-hover;
+                                property <length> cursor-x: strip-glow-touch.mouse-x;
+                                property <length> cursor-y: strip-glow-touch.mouse-y;
+                                property <color> glow-strong: root.status-tone == "success" ? #22c55e3d : root.status-tone == "danger" ? #f06a6a3d : #0091ff47;
+                                property <color> glow-medium: root.status-tone == "success" ? #22c55e24 : root.status-tone == "danger" ? #f06a6a24 : #0091ff29;
+                                property <color> glow-soft: root.status-tone == "success" ? #22c55e0f : root.status-tone == "danger" ? #f06a6a0f : #0091ff0f;
+                                property <color> grid-line-strong: root.status-tone == "success" ? #8ea39770 : root.status-tone == "danger" ? #a3939370 : #8f9eae70;
+                                x: 0;
+                                y: 0;
                                 width: parent.width;
-                                height: 1px;
-                                background: signal-mesh-field.grid-line-strong;
-                            }
-                        }
+                                height: parent.height;
+                                opacity: self.active ? 1 : 0;
+                                background: @radial-gradient(
+                                    circle 160px at cursor-x cursor-y,
+                                    glow-strong 0%,
+                                    glow-medium 26%,
+                                    glow-soft 52%,
+                                    #00000000 76%
+                                );
+                                animate opacity { duration: 160ms; easing: ease-out; }
 
-                        strip-glow-touch := TouchArea {
-                            x: 0;
-                            y: 0;
-                            width: parent.width;
-                            height: parent.height;
+                                for _[grid-x] in 120: Rectangle {
+                                    x: grid-x * 8px;
+                                    y: 0;
+                                    width: 8px;
+                                    height: parent.height;
+                                    background: transparent;
+
+                                    for _[grid-cell-y] in 12: Rectangle {
+                                        property <float> normalized-x: (grid-x * 8px + 4px - signal-mesh-field.cursor-x) / 176px;
+                                        property <float> normalized-y: (grid-cell-y * 8px + 4px - signal-mesh-field.cursor-y) / 72px;
+                                        property <float> distance: Math.sqrt(
+                                            self.normalized-x * self.normalized-x
+                                            + self.normalized-y * self.normalized-y
+                                        );
+                                        x: 0;
+                                        y: grid-cell-y * 8px;
+                                        width: 8px;
+                                        height: 8px;
+                                        background: transparent;
+                                        border-width: 0.5px;
+                                        border-color: signal-mesh-field.grid-line-strong;
+                                        opacity: signal-mesh-field.active ? Math.max(0, 1 - self.distance) : 0;
+                                    }
+                                }
+                            }
                         }
 
                         HorizontalLayout {
@@ -613,8 +623,8 @@ export component AppWindow inherits Window {
                                 power-button := Rectangle {
                                     x: (parent.width - self.width) / 2;
                                     y: (parent.height - self.height) / 2;
-                                    width: power-touch.pressed ? 69px : 72px;
-                                    height: power-touch.pressed ? 69px : 72px;
+                                    width: strip-glow-touch.pressed ? 69px : 72px;
+                                    height: strip-glow-touch.pressed ? 69px : 72px;
                                     border-radius: self.width / 2;
                                     clip: true;
                                     background: root.status-tone == "success" ? #0d1814f0 : root.status-tone == "danger" ? #1a1013f0 : #101722f0;
@@ -663,21 +673,6 @@ export component AppWindow inherits Window {
                                     }
                                 }
 
-                                power-touch := TouchArea {
-                                    x: 0;
-                                    y: 0;
-                                    width: parent.width;
-                                    height: parent.height;
-                                    enabled: root.primary-enabled;
-                                    clicked => { root.primary-action(); }
-                                    moved => {
-                                        connection-strip.power-cursor-x = power-action.x + self.mouse-x;
-                                        connection-strip.power-cursor-y = power-action.y + self.mouse-y;
-                                    }
-                                    changed has-hover => {
-                                        connection-strip.power-hover = self.has-hover;
-                                    }
-                                }
                             }
                             VerticalLayout {
                                 spacing: 2px;
@@ -697,6 +692,21 @@ export component AppWindow inherits Window {
                                 }
                             }
                         }
+
+                        // This is the pill's only pointer surface. It sits above every visual
+                        // child, so crossing the power icon never hands hover to another area.
+                        strip-glow-touch := TouchArea {
+                            x: 0;
+                            y: 0;
+                            width: root.has-profile ? parent.width : 0px;
+                            height: root.has-profile ? parent.height : 0px;
+                            clicked => {
+                                if (root.primary-enabled) {
+                                    root.primary-action();
+                                }
+                            }
+                        }
+
                     }
 
                     Rectangle {

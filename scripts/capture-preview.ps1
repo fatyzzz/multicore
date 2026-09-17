@@ -73,7 +73,6 @@ public static class PreviewWindow {
         SetCursorPos(screen.X, screen.Y);
         IntPtr position = (IntPtr)((y << 16) | (x & 0xffff));
         PostMessage(window, 0x0200, IntPtr.Zero, position);
-        PostMessage(window, 0x02A1, IntPtr.Zero, position);
     }
 
     public static Point GetCursorPosition() {
@@ -345,9 +344,11 @@ try {
     Start-Sleep -Seconds 2
     Set-PreviewSize $handle
     if ($HoverConnection) {
+        # Cross the power-icon boundary before settling on the left side of the
+        # same pill. The mesh must keep one continuous coordinate source.
+        Move-Preview $handle 300 112
         Move-Preview $handle 395 112
-        Click-Preview $handle 395 112
-        Move-Preview $handle 395 112
+        Move-Preview $handle 300 112
     }
     if ($SelectSecondRoute) {
         Click-Preview $handle ([Math]::Floor(($Width + 176) / 2)) 420
