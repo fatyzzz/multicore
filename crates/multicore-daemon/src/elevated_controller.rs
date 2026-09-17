@@ -1,7 +1,9 @@
 use std::{fmt, path::Path, time::Duration};
 
+#[cfg(test)]
+use multicore_core::elevation_protocol::BrokerErrorCode;
 use multicore_core::elevation_protocol::{
-    Authentication, BrokerErrorCode, ElevationCommand, ElevationResponse, SessionSecret,
+    Authentication, ElevationCommand, ElevationResponse, SessionSecret,
 };
 
 pub const BROKER_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
@@ -52,6 +54,7 @@ pub trait ElevatedHostLauncher: Send + Sync {
     ) -> Result<Self::Host, ElevationError>;
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SessionState {
     Listening,
@@ -60,13 +63,15 @@ enum SessionState {
     Closed,
 }
 
+#[cfg(test)]
 #[derive(Debug)]
-pub struct BrokerSession {
+struct BrokerSession {
     expected_client_pid: u32,
     secret: SessionSecret,
     state: SessionState,
 }
 
+#[cfg(test)]
 impl BrokerSession {
     #[must_use]
     pub fn new(expected_client_pid: u32, secret: SessionSecret) -> Self {
@@ -159,12 +164,15 @@ pub mod windows {
             io::{AsRawHandle, FromRawHandle, OwnedHandle},
         },
         ptr,
-        sync::atomic::{AtomicBool, Ordering},
+        sync::{
+            Mutex,
+            atomic::{AtomicBool, Ordering},
+        },
         time::Instant,
     };
     use windows_sys::Win32::{
         Foundation::{
-            CloseHandle, ERROR_BROKEN_PIPE, ERROR_IO_PENDING, ERROR_MORE_DATA,
+            CloseHandle, ERROR_BROKEN_PIPE, ERROR_IO_PENDING, ERROR_MORE_DATA, ERROR_NO_DATA,
             ERROR_OPERATION_ABORTED, ERROR_PIPE_CONNECTED, GetLastError, HANDLE,
             INVALID_HANDLE_VALUE, LocalFree, WAIT_OBJECT_0, WAIT_TIMEOUT,
         },
@@ -224,7 +232,17 @@ pub mod windows {
             protocol_version: u16,
             server_pid: u32,
         ) -> Result<LaunchedHost, ElevationError> {
-            if pipe_name.contains(['\0', '"']) || server_pid == 0 {
+            let Some(parent) = executable
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+            else {
+                return Err(ElevationError::LaunchFailed);
+            };
+            if pipe_name.contains(['\0', '"'])
+                || server_pid == 0
+                || os_str_contains_nul(executable.as_os_str())
+                || os_str_contains_nul(parent.as_os_str())
+            {
                 return Err(ElevationError::LaunchFailed);
             }
             let executable_wide = wide(executable.as_os_str());
@@ -232,9 +250,7 @@ pub mod windows {
             let parameters = wide(OsStr::new(&format!(
                 "--pipe \"{pipe_name}\" --protocol {protocol_version} --server-pid {server_pid}"
             )));
-            let directory = executable
-                .parent()
-                .map_or_else(|| vec![0], |parent| wide(parent.as_os_str()));
+            let directory = wide(parent.as_os_str());
             let mut info: SHELLEXECUTEINFOW = unsafe { zeroed() };
             info.cbSize = size_of::<SHELLEXECUTEINFOW>() as u32;
             info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC;
@@ -269,7 +285,8 @@ pub mod windows {
     }
 
     pub struct AuthenticatedPipe {
-        handle: OwnedHandle,
+        handle: Mutex<Option<OwnedHandle>>,
+        terminal: AtomicBool,
         _host_process: OwnedHandle,
     }
 
@@ -343,7 +360,8 @@ pub mod windows {
                 return Err(ElevationError::AuthenticationFailed);
             }
             Ok(AuthenticatedPipe {
-                handle: self.handle,
+                handle: Mutex::new(Some(self.handle)),
+                terminal: AtomicBool::new(false),
                 _host_process: host.process,
             })
         }
@@ -360,14 +378,30 @@ pub mod windows {
             command: &ElevationCommand,
             cancelled: &AtomicBool,
         ) -> Result<ElevationResponse, ElevationError> {
-            write_message(
-                self.handle.as_raw_handle(),
-                command,
-                BROKER_IO_TIMEOUT,
-                cancelled,
-            )?;
-            let frame = read_message(self.handle.as_raw_handle(), BROKER_IO_TIMEOUT, cancelled)?;
-            decode_frame(&frame).map_err(|_| ElevationError::Protocol)
+            if self.terminal.load(Ordering::Acquire) {
+                return Err(ElevationError::Disconnected);
+            }
+            let Ok(mut handle) = self.handle.lock() else {
+                self.terminal.store(true, Ordering::Release);
+                return Err(ElevationError::Disconnected);
+            };
+            let Some(pipe) = handle.as_ref() else {
+                self.terminal.store(true, Ordering::Release);
+                return Err(ElevationError::Disconnected);
+            };
+            let result = write_message(pipe.as_raw_handle(), command, BROKER_IO_TIMEOUT, cancelled)
+                .and_then(|()| read_message(pipe.as_raw_handle(), BROKER_IO_TIMEOUT, cancelled))
+                .and_then(|frame| decode_frame(&frame).map_err(|_| ElevationError::Protocol));
+            if result.is_err() {
+                handle.take();
+                self.terminal.store(true, Ordering::Release);
+            }
+            result
+        }
+
+        #[must_use]
+        pub fn is_terminal(&self) -> bool {
+            self.terminal.load(Ordering::Acquire)
         }
     }
 
@@ -486,14 +520,13 @@ pub mod windows {
         timeout: Duration,
         cancelled: &AtomicBool,
     ) -> Result<Vec<u8>, ElevationError> {
-        let mut pending = PendingIo::new()?;
-        let mut buffer = vec![0_u8; MAX_ELEVATION_FRAME_BYTES];
+        let mut pending = PendingIo::with_buffer(vec![0_u8; MAX_ELEVATION_FRAME_BYTES])?;
         let mut transferred = 0;
         let started = unsafe {
             ReadFile(
                 handle,
-                buffer.as_mut_ptr(),
-                buffer.len() as u32,
+                pending.buffer_mut().as_mut_ptr(),
+                MAX_ELEVATION_FRAME_BYTES as u32,
                 &mut transferred,
                 pending.overlapped_mut(),
             )
@@ -503,7 +536,7 @@ pub mod windows {
             if error == ERROR_MORE_DATA {
                 return Err(ElevationError::Protocol);
             }
-            if error == ERROR_BROKEN_PIPE {
+            if error == ERROR_BROKEN_PIPE || error == ERROR_NO_DATA {
                 return Err(ElevationError::Disconnected);
             }
             if error != ERROR_IO_PENDING {
@@ -514,6 +547,7 @@ pub mod windows {
         if transferred == 0 {
             return Err(ElevationError::Disconnected);
         }
+        let mut buffer = pending.take_buffer();
         buffer.truncate(transferred as usize);
         Ok(buffer)
     }
@@ -525,20 +559,30 @@ pub mod windows {
         cancelled: &AtomicBool,
     ) -> Result<(), ElevationError> {
         let frame = encode_frame(value).map_err(|_| ElevationError::Protocol)?;
-        let mut pending = PendingIo::new()?;
+        write_raw_message(handle, frame, timeout, cancelled)
+    }
+
+    fn write_raw_message(
+        handle: HANDLE,
+        frame: Vec<u8>,
+        timeout: Duration,
+        cancelled: &AtomicBool,
+    ) -> Result<(), ElevationError> {
+        let frame_len = frame.len();
+        let mut pending = PendingIo::with_buffer(frame)?;
         let mut transferred = 0;
         let started = unsafe {
             WriteFile(
                 handle,
-                frame.as_ptr(),
-                frame.len() as u32,
+                pending.buffer().as_ptr(),
+                frame_len as u32,
                 &mut transferred,
                 pending.overlapped_mut(),
             )
         };
         if started == 0 {
             let error = unsafe { GetLastError() };
-            if error == ERROR_BROKEN_PIPE {
+            if error == ERROR_BROKEN_PIPE || error == ERROR_NO_DATA {
                 return Err(ElevationError::Disconnected);
             }
             if error != ERROR_IO_PENDING {
@@ -546,7 +590,7 @@ pub mod windows {
             }
             transferred = wait_pending(handle, &mut pending, timeout, cancelled)?;
         }
-        if transferred as usize != frame.len() {
+        if transferred as usize != frame_len {
             return Err(ElevationError::Io);
         }
         Ok(())
@@ -582,7 +626,7 @@ pub mod windows {
                             Err(ElevationError::Cancelled)
                         } else if error == ERROR_MORE_DATA {
                             Err(ElevationError::Protocol)
-                        } else if error == ERROR_BROKEN_PIPE {
+                        } else if error == ERROR_BROKEN_PIPE || error == ERROR_NO_DATA {
                             Err(ElevationError::Disconnected)
                         } else {
                             Err(ElevationError::Io)
@@ -602,10 +646,15 @@ pub mod windows {
     struct PendingIo {
         overlapped: Option<Box<OVERLAPPED>>,
         event: Option<OwnedHandle>,
+        buffer: Option<Vec<u8>>,
     }
 
     impl PendingIo {
         fn new() -> Result<Self, ElevationError> {
+            Self::with_buffer(Vec::new())
+        }
+
+        fn with_buffer(buffer: Vec<u8>) -> Result<Self, ElevationError> {
             let handle = unsafe { CreateEventW(ptr::null(), 1, 0, ptr::null()) };
             if handle.is_null() {
                 return Err(ElevationError::Io);
@@ -616,6 +665,7 @@ pub mod windows {
             Ok(Self {
                 overlapped: Some(overlapped),
                 event: Some(event),
+                buffer: Some(buffer),
             })
         }
 
@@ -628,6 +678,20 @@ pub mod windows {
                 .as_ref()
                 .expect("pending I/O event is live")
                 .as_raw_handle()
+        }
+
+        fn buffer(&self) -> &[u8] {
+            self.buffer.as_deref().expect("pending I/O buffer is live")
+        }
+
+        fn buffer_mut(&mut self) -> &mut [u8] {
+            self.buffer
+                .as_deref_mut()
+                .expect("pending I/O buffer is live")
+        }
+
+        fn take_buffer(&mut self) -> Vec<u8> {
+            self.buffer.take().expect("pending I/O buffer is live")
         }
 
         fn cancel_and_drain(&mut self, handle: HANDLE) {
@@ -644,8 +708,13 @@ pub mod windows {
                 // the stable OVERLAPPED and event alive; closing the pipe later completes it.
                 Box::leak(self.overlapped.take().expect("pending I/O is live"));
                 std::mem::forget(self.event.take().expect("pending I/O event is live"));
+                std::mem::forget(self.buffer.take().expect("pending I/O buffer is live"));
             }
         }
+    }
+
+    fn os_str_contains_nul(value: &OsStr) -> bool {
+        value.encode_wide().any(|unit| unit == 0)
     }
 
     fn wide(value: &OsStr) -> Vec<u16> {
@@ -658,7 +727,84 @@ pub mod windows {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use std::{fs::OpenOptions, sync::mpsc, thread};
+        use multicore_core::elevation_protocol::{BrokerErrorCode, decode_command};
+        use std::{
+            fs::OpenOptions,
+            os::windows::fs::OpenOptionsExt,
+            sync::{Arc, mpsc},
+            thread,
+        };
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+
+        fn open_test_client(name: &str) -> std::fs::File {
+            let started = Instant::now();
+            loop {
+                match OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .custom_flags(
+                        FILE_FLAG_OVERLAPPED
+                            | windows_sys::Win32::Storage::FileSystem::SECURITY_SQOS_PRESENT
+                            | windows_sys::Win32::Storage::FileSystem::SECURITY_IDENTIFICATION,
+                    )
+                    .open(name)
+                {
+                    Ok(pipe) => return pipe,
+                    Err(_) if started.elapsed() < Duration::from_secs(2) => {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("client did not connect: {error}"),
+                }
+            }
+        }
+
+        fn current_process_host() -> LaunchedHost {
+            let process_id = unsafe { GetCurrentProcessId() };
+            let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, process_id) };
+            assert!(!process.is_null());
+            LaunchedHost {
+                process: unsafe { OwnedHandle::from_raw_handle(process) },
+                process_id,
+            }
+        }
+
+        fn spawn_protocol_client(
+            name: String,
+            behavior: impl FnOnce(HANDLE, &AtomicBool) + Send + 'static,
+        ) -> thread::JoinHandle<()> {
+            thread::spawn(move || {
+                let pipe = open_test_client(&name);
+                let mut server_pid = 0;
+                assert_ne!(
+                    unsafe {
+                        windows_sys::Win32::System::Pipes::GetNamedPipeServerProcessId(
+                            pipe.as_raw_handle(),
+                            &mut server_pid,
+                        )
+                    },
+                    0
+                );
+                assert_eq!(server_pid, unsafe { GetCurrentProcessId() });
+                let never_cancelled = AtomicBool::new(false);
+                let auth = read_message(
+                    pipe.as_raw_handle(),
+                    Duration::from_secs(2),
+                    &never_cancelled,
+                )
+                .unwrap();
+                let proof: Authentication = decode_frame(&auth).unwrap();
+                write_message(
+                    pipe.as_raw_handle(),
+                    &proof,
+                    Duration::from_secs(2),
+                    &never_cancelled,
+                )
+                .unwrap();
+                behavior(pipe.as_raw_handle(), &never_cancelled);
+            })
+        }
 
         fn connected_server() -> (NamedPipeServer, mpsc::Sender<()>, thread::JoinHandle<()>) {
             let server = NamedPipeServer::create().unwrap();
@@ -666,16 +812,7 @@ pub mod windows {
             let (opened_tx, opened_rx) = mpsc::channel();
             let (release_tx, release_rx) = mpsc::channel();
             let client = thread::spawn(move || {
-                let started = Instant::now();
-                let _pipe = loop {
-                    match OpenOptions::new().read(true).write(true).open(&name) {
-                        Ok(pipe) => break pipe,
-                        Err(_) if started.elapsed() < Duration::from_secs(2) => {
-                            thread::sleep(Duration::from_millis(5));
-                        }
-                        Err(error) => panic!("client did not connect: {error}"),
-                    }
-                };
+                let _pipe = open_test_client(&name);
                 opened_tx.send(()).unwrap();
                 release_rx.recv().unwrap();
             });
@@ -733,13 +870,183 @@ pub mod windows {
                 Err(ElevationError::Cancelled)
             );
         }
+
+        #[test]
+        fn pending_write_cancellation_retains_kernel_referenced_buffer() {
+            let (server, release, client) = connected_server();
+            let never_cancelled = AtomicBool::new(false);
+            write_raw_message(
+                server.handle.as_raw_handle(),
+                vec![b'a'; MAX_ELEVATION_FRAME_BYTES - 1],
+                Duration::from_secs(2),
+                &never_cancelled,
+            )
+            .unwrap();
+            let cancelled = AtomicBool::new(true);
+            assert_eq!(
+                write_raw_message(
+                    server.handle.as_raw_handle(),
+                    vec![b'b'; MAX_ELEVATION_FRAME_BYTES - 1],
+                    Duration::from_secs(1),
+                    &cancelled,
+                ),
+                Err(ElevationError::Cancelled)
+            );
+            release.send(()).unwrap();
+            client.join().unwrap();
+        }
+
+        #[test]
+        fn real_pipe_completes_mutual_auth_and_one_command() {
+            let server = NamedPipeServer::create().unwrap();
+            let client = spawn_protocol_client(server.name.clone(), |handle, cancelled| {
+                let frame = read_message(handle, Duration::from_secs(2), cancelled).unwrap();
+                assert_eq!(
+                    decode_command(&frame).unwrap(),
+                    ElevationCommand::StartXray { generation_id: 9 }
+                );
+                write_message(
+                    handle,
+                    &ElevationResponse::Error {
+                        code: BrokerErrorCode::NotReady,
+                    },
+                    Duration::from_secs(2),
+                    cancelled,
+                )
+                .unwrap();
+            });
+            let cancelled = AtomicBool::new(false);
+            let secret = SessionSecret::from_bytes([7; 32]);
+            let pipe = server
+                .authenticate(current_process_host(), &secret, &cancelled)
+                .unwrap();
+            assert_eq!(
+                pipe.request(
+                    &ElevationCommand::StartXray { generation_id: 9 },
+                    &cancelled
+                ),
+                Ok(ElevationResponse::Error {
+                    code: BrokerErrorCode::NotReady
+                })
+            );
+            assert!(!pipe.is_terminal());
+            client.join().unwrap();
+        }
+
+        #[test]
+        fn eof_and_cancel_poison_production_pipe_against_reuse() {
+            let server = NamedPipeServer::create().unwrap();
+            let client = spawn_protocol_client(server.name.clone(), |_handle, _| {});
+            let cancelled = AtomicBool::new(false);
+            let pipe = server
+                .authenticate(
+                    current_process_host(),
+                    &SessionSecret::from_bytes([8; 32]),
+                    &cancelled,
+                )
+                .unwrap();
+            client.join().unwrap();
+            assert_eq!(
+                pipe.request(&ElevationCommand::Diagnostics, &cancelled),
+                Err(ElevationError::Disconnected)
+            );
+            assert!(pipe.is_terminal());
+            assert_eq!(
+                pipe.request(&ElevationCommand::Diagnostics, &cancelled),
+                Err(ElevationError::Disconnected)
+            );
+
+            let server = NamedPipeServer::create().unwrap();
+            let client = spawn_protocol_client(server.name.clone(), |handle, cancelled| {
+                let _ = read_message(handle, Duration::from_secs(2), cancelled).unwrap();
+                thread::sleep(Duration::from_millis(250));
+            });
+            let cancellation = Arc::new(AtomicBool::new(false));
+            let pipe = server
+                .authenticate(
+                    current_process_host(),
+                    &SessionSecret::from_bytes([9; 32]),
+                    &cancellation,
+                )
+                .unwrap();
+            let trigger = Arc::clone(&cancellation);
+            let canceller = thread::spawn(move || {
+                thread::sleep(Duration::from_millis(25));
+                trigger.store(true, Ordering::Release);
+            });
+            assert_eq!(
+                pipe.request(&ElevationCommand::Diagnostics, &cancellation),
+                Err(ElevationError::Cancelled)
+            );
+            assert!(pipe.is_terminal());
+            canceller.join().unwrap();
+            client.join().unwrap();
+        }
+
+        #[test]
+        fn trailing_or_oversized_response_terminally_poison_transport() {
+            let server = NamedPipeServer::create().unwrap();
+            let client = spawn_protocol_client(server.name.clone(), |handle, cancelled| {
+                let _ = read_message(handle, Duration::from_secs(2), cancelled).unwrap();
+                let mut trailing = encode_frame(&ElevationResponse::Stopped).unwrap();
+                trailing.push(0);
+                write_raw_message(handle, trailing, Duration::from_secs(2), cancelled).unwrap();
+            });
+            let cancelled = AtomicBool::new(false);
+            let pipe = server
+                .authenticate(
+                    current_process_host(),
+                    &SessionSecret::from_bytes([10; 32]),
+                    &cancelled,
+                )
+                .unwrap();
+            assert_eq!(
+                pipe.request(&ElevationCommand::Diagnostics, &cancelled),
+                Err(ElevationError::Protocol)
+            );
+            assert!(pipe.is_terminal());
+            client.join().unwrap();
+
+            let server = NamedPipeServer::create().unwrap();
+            let client = spawn_protocol_client(server.name.clone(), |handle, cancelled| {
+                let _ = read_message(handle, Duration::from_secs(2), cancelled).unwrap();
+                write_raw_message(
+                    handle,
+                    vec![b'x'; MAX_ELEVATION_FRAME_BYTES + 1],
+                    Duration::from_secs(2),
+                    cancelled,
+                )
+                .unwrap();
+            });
+            let pipe = server
+                .authenticate(
+                    current_process_host(),
+                    &SessionSecret::from_bytes([11; 32]),
+                    &cancelled,
+                )
+                .unwrap();
+            assert_eq!(
+                pipe.request(&ElevationCommand::Diagnostics, &cancelled),
+                Err(ElevationError::Protocol)
+            );
+            assert!(pipe.is_terminal());
+            client.join().unwrap();
+        }
+
+        #[test]
+        fn launcher_input_rejects_embedded_nul_before_win32() {
+            use std::os::windows::ffi::OsStringExt;
+            let value = std::ffi::OsString::from_wide(&[b'C' as u16, b':' as u16, 0, b'x' as u16]);
+            assert!(os_str_contains_nul(&value));
+            assert!(!os_str_contains_nul(OsStr::new(r"C:\safe\host.exe")));
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use multicore_core::elevation_protocol::{ElevatedEngine, SessionSecret};
+    use multicore_core::elevation_protocol::{BrokerErrorCode, ElevatedEngine, SessionSecret};
 
     #[test]
     fn wrong_pid_second_client_and_wrong_secret_fail_closed() {

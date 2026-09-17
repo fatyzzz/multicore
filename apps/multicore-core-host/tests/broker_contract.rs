@@ -24,6 +24,8 @@ fn host_command_line_and_diagnostics_never_carry_secrets_or_configs() {
 fn windows_transport_is_bounded_overlapped_and_peer_authenticated() {
     for required in [
         "FILE_FLAG_OVERLAPPED",
+        "SECURITY_SQOS_PRESENT",
+        "SECURITY_IDENTIFICATION",
         "GetNamedPipeServerProcessId",
         "CancelIoEx",
         "MAX_ELEVATION_FRAME_BYTES",
@@ -35,4 +37,6 @@ fn windows_transport_is_bounded_overlapped_and_peer_authenticated() {
         WINDOWS_PIPE.find("verify_server_pid").unwrap()
             < WINDOWS_PIPE.find("authentication_frame").unwrap()
     );
+    assert!(WINDOWS_PIPE.contains("std::mem::forget(self.buffer.take()"));
+    assert!(!WINDOWS_PIPE.contains("Err(HostError::TimedOut) => continue"));
 }
