@@ -3757,45 +3757,46 @@ mod tests {
         assert!(source.contains("if !root.has-service-logo: Image"));
         assert!(source.contains("@image-url(\"../assets/power.svg\")"));
         assert!(source.contains("signal-mesh-field := Rectangle"));
-        assert!(source.contains("connect-halo := Rectangle"));
-        assert!(source.contains("power-cursor-wash := Rectangle"));
-        assert!(source.contains("power-mesh := Rectangle"));
-        assert!(source.contains("for _[button-grid-x] in 10"));
-        assert!(source.contains("for _[button-grid-y] in 10"));
-        let power_mesh = source
-            .split("power-mesh := Rectangle")
+        assert!(source.contains("strip-glow-touch := TouchArea"));
+        let connection_strip = source
+            .split("connection-strip := Rectangle")
             .nth(1)
-            .and_then(|source| source.split("power-cursor-wash := Rectangle").next())
-            .expect("power mesh source");
-        let power_mesh_frame = power_mesh
-            .split("animate opacity")
-            .next()
-            .expect("power mesh frame");
-        assert!(power_mesh_frame.contains("width: parent.width;"));
-        assert!(power_mesh_frame.contains("height: parent.height;"));
-        let power_wash = source
-            .split("power-cursor-wash := Rectangle")
+            .and_then(|source| source.split("height: 54px;").next())
+            .expect("connection strip source");
+        assert!(
+            connection_strip
+                .find("signal-mesh-field := Rectangle")
+                .expect("pill mesh")
+                < connection_strip
+                    .find("HorizontalLayout")
+                    .expect("pill layout")
+        );
+        let pill_mesh = connection_strip
+            .split("signal-mesh-field := Rectangle")
             .nth(1)
-            .and_then(|source| source.split("if root.has-service-logo: Rectangle").next())
-            .expect("power wash source");
-        let power_wash_frame = power_wash
-            .split("background: @radial-gradient")
-            .next()
-            .expect("power wash frame");
-        assert!(power_wash_frame.contains("width: parent.width;"));
-        assert!(power_wash_frame.contains("height: parent.height;"));
-        assert!(source.contains("power-touch.mouse-x"));
-        assert!(source.contains("power-touch.mouse-y"));
-        assert!(source.contains("power-touch.has-hover"));
-        assert!(source.contains("background: power-touch.has-hover || power-action.has-focus"));
+            .and_then(|source| source.split("HorizontalLayout").next())
+            .expect("pill mesh source");
+        assert!(pill_mesh.contains("x: 0;"));
+        assert!(pill_mesh.contains("y: 0;"));
+        assert!(pill_mesh.contains("width: parent.width;"));
+        assert!(pill_mesh.contains("height: parent.height;"));
+        assert!(pill_mesh.contains("strip-glow-touch.has-hover"));
+        assert!(source.contains("connection-strip.power-cursor-x = power-action.x + self.mouse-x"));
+        assert!(source.contains("connection-strip.power-cursor-y = power-action.y + self.mouse-y"));
+        assert!(source.contains("connection-strip.power-hover = self.has-hover"));
         assert!(source.contains("@radial-gradient("));
-        assert!(source.contains("circle 108px at cursor-x cursor-y"));
-        assert!(source.contains("circle 56px at cursor-x cursor-y"));
-        assert!(source.contains("circle 48px at cursor-x cursor-y"));
-        assert!(source.contains("for _[grid-x] in 28"));
+        assert!(source.contains("circle 240px at cursor-x cursor-y"));
+        assert!(source.contains("for _[grid-x] in 100"));
         assert!(source.contains("for _[grid-y] in 13"));
         assert!(source.contains("grid-line-strong"));
         assert!(source.contains("background: signal-mesh-field.grid-line-strong;"));
+        assert!(source.contains("#66e8a632"));
+        assert!(source.contains("#0d1814f0"));
+        assert!(!source.contains("connect-halo := Rectangle"));
+        assert!(!source.contains("power-cursor-wash := Rectangle"));
+        assert!(!source.contains("power-mesh := Rectangle"));
+        assert!(!source.contains("button-grid-x"));
+        assert!(!source.contains("button-grid-y"));
         assert!(!source.contains("Local signal grid: structural guides"));
         assert!(!source.contains("background: #ffffff05;"));
         assert!(source.contains("subscription-announcement-text"));
