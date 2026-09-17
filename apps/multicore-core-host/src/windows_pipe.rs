@@ -14,8 +14,8 @@ use std::{
 };
 
 use multicore_core::elevation_protocol::{
-    Authentication, BrokerErrorCode, ELEVATION_PROTOCOL_VERSION, ElevationCommand,
-    ElevationResponse, MAX_ELEVATION_FRAME_BYTES, decode_command, decode_frame, encode_frame,
+    Authentication, ELEVATION_PROTOCOL_VERSION, ElevationCommand, MAX_ELEVATION_FRAME_BYTES,
+    decode_command, decode_frame, encode_frame,
 };
 use windows_sys::Win32::{
     Foundation::{
@@ -65,23 +65,14 @@ pub(crate) fn run() -> Result<(), HostError> {
         decode_frame(&authentication_frame).map_err(|_| HostError::Protocol)?;
     write_message(pipe.as_raw_handle(), &authentication, IO_TIMEOUT)?;
 
+    // From this point on, every error/EOF path drops the host and its kill-on-close job.
+    let mut runtime = crate::runtime_host::RuntimeHost::production().map_err(|_| HostError::Io)?;
+
     loop {
         let frame = read_message_until_peer_exit(pipe.as_raw_handle(), arguments.server_pid)?;
         let command = decode_command(&frame).map_err(|_| HostError::Protocol)?;
         let shutdown = command == ElevationCommand::Shutdown;
-        let response = match command {
-            ElevationCommand::StartXray { .. } | ElevationCommand::StartMihomo { .. } => {
-                ElevationResponse::Error {
-                    code: BrokerErrorCode::NotReady,
-                }
-            }
-            ElevationCommand::Stop { engine } => ElevationResponse::Stopped { engine },
-            ElevationCommand::Diagnostics => ElevationResponse::Diagnostics {
-                xray_running: false,
-                mihomo_running: false,
-            },
-            ElevationCommand::Shutdown => ElevationResponse::ShuttingDown,
-        };
+        let response = runtime.execute(command);
         write_message(pipe.as_raw_handle(), &response, IO_TIMEOUT)?;
         if shutdown {
             return Ok(());
@@ -458,7 +449,7 @@ fn cancellation_reaper() -> &'static Arc<CancellationReaper> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use multicore_core::elevation_protocol::SessionSecret;
+    use multicore_core::elevation_protocol::{ElevationResponse, SessionSecret};
     use std::{
         io::{Read, Write},
         os::windows::io::FromRawHandle,

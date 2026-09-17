@@ -3105,6 +3105,7 @@ dependencies = [
  "embed-resource",
  "multicore-core",
  "serde",
+ "tokio",
  "windows-sys 0.61.2",
  "zeroize",
 ]

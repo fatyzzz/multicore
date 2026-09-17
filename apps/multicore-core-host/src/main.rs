@@ -1,4 +1,8 @@
 #[cfg(windows)]
+mod runtime_host;
+#[cfg(windows)]
+mod runtime_paths;
+#[cfg(windows)]
 mod windows_pipe;
 
 #[cfg(windows)]

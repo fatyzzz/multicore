@@ -9,6 +9,8 @@ mod sidecar;
 mod snapshot;
 mod state;
 mod supervisor;
+#[cfg(windows)]
+mod windows_job;
 
 pub use device_identity::{DeviceIdentity, DeviceIdentityError, derive_incy_hwid, is_valid_hwid};
 pub use event::{Component, Event, Severity};
@@ -37,3 +39,5 @@ pub use snapshot::{
 };
 pub use state::{ConnectionState, StateError, StateMachine};
 pub use supervisor::{Engine, ProcessController, Supervisor, SupervisorError};
+#[cfg(windows)]
+pub use windows_job::{WindowsJobLauncher, WindowsJobManagedChild};

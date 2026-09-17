@@ -50,6 +50,34 @@ pub enum BrokerErrorCode {
     InvalidRequest,
     AuthenticationFailed,
     TimedOut,
+    GenerationMismatch,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ElevatedRuntimeState {
+    Stopped,
+    Starting,
+    Ready,
+    Failed,
+    Unsupported,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ElevatedDiagnosticStream {
+    Stdout,
+    Stderr,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ElevatedLogRecord {
+    pub id: u64,
+    pub timestamp_ms: u64,
+    pub engine: ElevatedEngine,
+    pub stream: ElevatedDiagnosticStream,
+    pub message: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -64,6 +92,12 @@ pub enum ElevationResponse {
     Diagnostics {
         xray_running: bool,
         mihomo_running: bool,
+    },
+    ProcessDiagnostics {
+        xray: ElevatedRuntimeState,
+        mihomo: ElevatedRuntimeState,
+        tun: ElevatedRuntimeState,
+        logs: Vec<ElevatedLogRecord>,
     },
     ShuttingDown,
     Error {
@@ -222,6 +256,7 @@ pub fn response_matches_command(command: &ElevationCommand, response: &Elevation
             ElevationResponse::Stopped { engine: actual },
         ) if expected == actual => true,
         (ElevationCommand::Diagnostics, ElevationResponse::Diagnostics { .. })
+        | (ElevationCommand::Diagnostics, ElevationResponse::ProcessDiagnostics { .. })
         | (ElevationCommand::Shutdown, ElevationResponse::ShuttingDown) => true,
         _ => false,
     }

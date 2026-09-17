@@ -1,6 +1,11 @@
 const HOST_MAIN: &str = include_str!("../src/main.rs");
 const WINDOWS_PIPE: &str = include_str!("../src/windows_pipe.rs");
 
+#[path = "../src/runtime_host.rs"]
+mod runtime_host;
+#[path = "../src/runtime_paths.rs"]
+mod runtime_paths;
+
 #[path = "../src/windows_pipe.rs"]
 #[allow(dead_code)]
 mod windows_pipe;

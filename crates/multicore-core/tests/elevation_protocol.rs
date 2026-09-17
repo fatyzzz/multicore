@@ -85,6 +85,32 @@ fn responses_also_use_an_exact_bounded_schema() {
 }
 
 #[test]
+fn typed_process_diagnostics_remain_inside_the_broker_frame() {
+    use multicore_core::elevation_protocol::{
+        ElevatedDiagnosticStream, ElevatedLogRecord, ElevatedRuntimeState,
+    };
+    let response = ElevationResponse::ProcessDiagnostics {
+        xray: ElevatedRuntimeState::Ready,
+        mihomo: ElevatedRuntimeState::Ready,
+        tun: ElevatedRuntimeState::Ready,
+        logs: vec![ElevatedLogRecord {
+            id: 1,
+            timestamp_ms: 2,
+            engine: ElevatedEngine::Xray,
+            stream: ElevatedDiagnosticStream::Stderr,
+            message: "safe diagnostic".into(),
+        }],
+    };
+    let frame = encode_frame(&response).unwrap();
+    assert!(frame.len() <= MAX_ELEVATION_FRAME_BYTES);
+    assert_eq!(decode_frame::<ElevationResponse>(&frame).unwrap(), response);
+    assert!(response_matches_command(
+        &ElevationCommand::Diagnostics,
+        &response
+    ));
+}
+
+#[test]
 fn every_response_is_paired_with_its_originating_command() {
     let cases = [
         (
