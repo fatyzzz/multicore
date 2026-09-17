@@ -63,6 +63,7 @@ struct WindowObservation {
 
 struct PersistenceTracker {
     persisted: AppPreferences,
+    desired: AppPreferences,
     candidate: Option<WindowObservation>,
     queued: Option<AppPreferences>,
 }
@@ -70,25 +71,21 @@ struct PersistenceTracker {
 impl PersistenceTracker {
     fn new(persisted: AppPreferences) -> Self {
         Self {
+            desired: persisted.clone(),
             persisted,
             candidate: None,
             queued: None,
         }
     }
 
-    fn preferences_for(&self, observation: &WindowObservation) -> AppPreferences {
-        let mut next = self.persisted.clone();
+    fn incorporate_observation(&mut self, observation: &WindowObservation) {
+        let mut next = self.desired.clone();
         if let Some(bounds) = &observation.restored_bounds {
             next.restored_bounds = Some(bounds.clone());
         }
         next.maximized = observation.maximized;
         next.visible_page = observation.visible_page.clone();
-        next
-    }
-
-    fn changed_preferences_for(&self, observation: &WindowObservation) -> Option<AppPreferences> {
-        let next = self.preferences_for(observation);
-        (next != self.persisted).then_some(next)
+        self.desired = next;
     }
 
     fn observe(&mut self, observation: Option<WindowObservation>) -> Option<AppPreferences> {
@@ -98,17 +95,13 @@ impl PersistenceTracker {
         };
         let stable = self.candidate.as_ref() == Some(&observation);
         self.candidate = Some(observation.clone());
-        let next = stable
-            .then(|| self.changed_preferences_for(&observation))
-            .flatten();
-        if next
-            .as_ref()
-            .is_some_and(|next| self.queued.as_ref() == Some(next))
+        self.incorporate_observation(&observation);
+        if !stable || self.desired == self.persisted || self.queued.as_ref() == Some(&self.desired)
         {
             return None;
         }
-        self.queued = next.clone();
-        next
+        self.queued = Some(self.desired.clone());
+        self.queued.clone()
     }
 
     fn mark_persisted(&mut self, preferences: AppPreferences) {
@@ -116,6 +109,18 @@ impl PersistenceTracker {
             self.queued = None;
         }
         self.persisted = preferences;
+    }
+
+    fn snapshot_for_flush(&mut self, observation: Option<&WindowObservation>) -> AppPreferences {
+        if let Some(observation) = observation {
+            self.incorporate_observation(observation);
+        }
+        self.desired.clone()
+    }
+
+    #[cfg(test)]
+    fn latest_desired(&self) -> &AppPreferences {
+        &self.desired
     }
 }
 
@@ -778,11 +783,8 @@ fn flush_preferences(
 ) {
     let observation = observe_window(ui);
     let preferences = {
-        let tracker = tracker.lock().expect("preference tracker lock");
-        observation.as_ref().map_or_else(
-            || tracker.persisted.clone(),
-            |value| tracker.preferences_for(value),
-        )
+        let mut tracker = tracker.lock().expect("preference tracker lock");
+        tracker.snapshot_for_flush(observation.as_ref())
     };
     let saved = writer
         .lock()
@@ -1935,6 +1937,116 @@ mod window_tests {
         );
         assert_eq!(retry_delay_after_failure(3), None);
         assert_eq!(retry_delay_after_failure(4), None);
+    }
+
+    #[test]
+    fn queued_restored_bounds_survive_maximize_before_ack_and_exit_flush() {
+        let bounds_a = WindowBounds {
+            x: 10,
+            y: 20,
+            width: 800,
+            height: 650,
+        };
+        let bounds_b = WindowBounds {
+            x: 300,
+            y: 240,
+            width: 980,
+            height: 760,
+        };
+        let mut tracker = PersistenceTracker::new(AppPreferences {
+            restored_bounds: Some(bounds_a),
+            ..AppPreferences::default()
+        });
+        let restored_b = WindowObservation {
+            restored_bounds: Some(bounds_b.clone()),
+            maximized: false,
+            visible_page: VisiblePage::Home,
+        };
+        assert_eq!(tracker.observe(Some(restored_b.clone())), None);
+        let queued_b = tracker.observe(Some(restored_b)).expect("B queued");
+        assert_eq!(queued_b.restored_bounds, Some(bounds_b.clone()));
+
+        let maximized = WindowObservation {
+            restored_bounds: None,
+            maximized: true,
+            visible_page: VisiblePage::Settings,
+        };
+        assert_eq!(tracker.observe(Some(maximized.clone())), None);
+        let exit_snapshot = tracker.snapshot_for_flush(Some(&maximized));
+        assert_eq!(exit_snapshot.restored_bounds, Some(bounds_b));
+        assert!(exit_snapshot.maximized);
+        assert_eq!(exit_snapshot.visible_page, VisiblePage::Settings);
+    }
+
+    #[test]
+    fn older_saved_ack_does_not_roll_latest_desired_snapshot_back() {
+        let bounds_a = WindowBounds {
+            x: 10,
+            y: 20,
+            width: 800,
+            height: 650,
+        };
+        let bounds_b = WindowBounds {
+            x: 300,
+            y: 240,
+            width: 980,
+            height: 760,
+        };
+        let initial = AppPreferences {
+            restored_bounds: Some(bounds_a),
+            ..AppPreferences::default()
+        };
+        let mut tracker = PersistenceTracker::new(initial);
+        let restored_b = WindowObservation {
+            restored_bounds: Some(bounds_b.clone()),
+            maximized: false,
+            visible_page: VisiblePage::Home,
+        };
+        tracker.observe(Some(restored_b.clone()));
+        let queued_b = tracker.observe(Some(restored_b)).unwrap();
+        let maximized = WindowObservation {
+            restored_bounds: None,
+            maximized: true,
+            visible_page: VisiblePage::Status,
+        };
+        tracker.observe(Some(maximized));
+        tracker.mark_persisted(queued_b);
+
+        assert_eq!(tracker.latest_desired().restored_bounds, Some(bounds_b));
+        assert!(tracker.latest_desired().maximized);
+        assert_eq!(tracker.latest_desired().visible_page, VisiblePage::Status);
+    }
+
+    #[test]
+    fn failed_in_flight_snapshot_remains_the_exit_restore_source() {
+        let bounds_b = WindowBounds {
+            x: -400,
+            y: 80,
+            width: 920,
+            height: 700,
+        };
+        let mut tracker = PersistenceTracker::new(AppPreferences::default());
+        let restored_b = WindowObservation {
+            restored_bounds: Some(bounds_b.clone()),
+            maximized: false,
+            visible_page: VisiblePage::Home,
+        };
+        tracker.observe(Some(restored_b.clone()));
+        assert!(tracker.observe(Some(restored_b)).is_some());
+        for _failed_attempt in 0..3 {
+            assert_eq!(
+                tracker.latest_desired().restored_bounds,
+                Some(bounds_b.clone())
+            );
+        }
+
+        let exit_snapshot = tracker.snapshot_for_flush(Some(&WindowObservation {
+            restored_bounds: None,
+            maximized: true,
+            visible_page: VisiblePage::Settings,
+        }));
+        assert_eq!(exit_snapshot.restored_bounds, Some(bounds_b));
+        assert!(exit_snapshot.maximized);
     }
 
     #[test]
