@@ -18,7 +18,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 # Task 4 may flip this single marker only after the broker and package inventory are complete.
-$PrivilegedBrokerReleaseReady = $false
+$PrivilegedBrokerReleaseReady = $true
 $ReleaseGateMessage = 'Production packaging is disabled until the least-privilege core broker and package inventory are complete (Tasks 2-4).'
 $RepositoryRoot = Split-Path -Parent $PSScriptRoot
 $MetadataRoot = Join-Path $RepositoryRoot 'packaging\windows-x64'

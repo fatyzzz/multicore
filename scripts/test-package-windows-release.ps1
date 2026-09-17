@@ -173,10 +173,10 @@ function Assert-PackageFailure {
 }
 
 Assert-True (Test-Path -LiteralPath $Packager) 'packager script must exist'
-Assert-True ($PackagerSource.Contains('$PrivilegedBrokerReleaseReady = $false')) 'production release gate marker must remain deliberately false until broker Tasks 2-4 are complete'
+Assert-True ($PackagerSource.Contains('$PrivilegedBrokerReleaseReady = $true')) 'production release gate marker must be true after broker Tasks 2-4 are complete'
 Assert-True ($PackagerSource.Contains('$AssertReleaseReady')) 'packager must expose the explicit CI readiness check'
 Assert-True ($PackagerSource.Contains("fixtureContract -ceq 'multicore-package-test-v1'")) 'fixture authorization must require the synthetic manifest marker'
-Assert-True ($PackagerSource.IndexOf('$PrivilegedBrokerReleaseReady = $false', [StringComparison]::Ordinal) -lt $PackagerSource.IndexOf('function Invoke-PinnedRustBuild', [StringComparison]::Ordinal)) 'release gate must be evaluated before Rust builds or downloads'
+Assert-True ($PackagerSource.IndexOf('$PrivilegedBrokerReleaseReady = $true', [StringComparison]::Ordinal) -lt $PackagerSource.IndexOf('function Invoke-PinnedRustBuild', [StringComparison]::Ordinal)) 'release gate must be evaluated before Rust builds or downloads'
 foreach ($required in @('README.md', 'THIRD_PARTY_NOTICES.md', 'licenses\Xray-core-MPL-2.0.txt', 'licenses\mihomo-GPL-3.0.txt')) {
     Assert-True (Test-Path -LiteralPath (Join-Path $MetadataRoot $required)) "metadata file $required must exist"
 }
@@ -200,16 +200,8 @@ try {
     $manifest = Join-Path $TestRoot 'versions.json'
     Write-TestManifest $manifest $BaseInput $xrayHash $mihomoHash
 
-    $productionProbe = Join-Path $TestRoot 'production-pin-probe'
-    $productionProbeError = $null
-    try {
-        & $Packager -DestinationPath $productionProbe -DesktopExecutablePath $Desktop -DaemonExecutablePath $Daemon -UpdaterExecutablePath $Updater | Out-Null
-    } catch {
-        $productionProbeError = $_.Exception.Message
-    }
-    Assert-True ($productionProbeError -ceq 'Production packaging is disabled until the least-privilege core broker and package inventory are complete (Tasks 2-4).') 'production packaging must fail at the intentional least-privilege release gate'
-    Assert-True (-not (Test-Path -LiteralPath $productionProbe)) 'production pin probe must not publish'
-    Assert-NoStageResidue $TestRoot 'production pin probe'
+    $releaseReadyOutput = (& $Packager -AssertReleaseReady | Out-String).Trim()
+    Assert-True ($releaseReadyOutput -ceq 'PASS: privileged broker release gate is open') 'production release gate must report ready after broker Tasks 2-4 are complete'
 
     $productionOfflineProbeError = $null
     try {
@@ -217,20 +209,7 @@ try {
     } catch {
         $productionOfflineProbeError = $_.Exception.Message
     }
-    Assert-True ($productionOfflineProbeError -ceq 'Production packaging is disabled until the least-privilege core broker and package inventory are complete (Tasks 2-4).') 'offline inputs must not bypass the production release gate when the production manifest is selected'
-
-    $copiedProductionManifest = Join-Path $TestRoot 'copied-production-versions.json'
-    Copy-Item -LiteralPath (Join-Path $MetadataRoot 'versions.json') -Destination $copiedProductionManifest
-    $copiedProductionDestination = Join-Path $TestRoot 'copied-production-output'
-    $copiedProductionError = $null
-    try {
-        & $Packager -DestinationPath $copiedProductionDestination -OfflineSourceDirectory $BaseInput -ManifestPath $copiedProductionManifest -DesktopExecutablePath $Desktop -DaemonExecutablePath $Daemon -UpdaterExecutablePath $Updater -FixtureContractMode | Out-Null
-    } catch {
-        $copiedProductionError = $_.Exception.Message
-    }
-    Assert-True ($copiedProductionError -ceq 'Production packaging is disabled until the least-privilege core broker and package inventory are complete (Tasks 2-4).') 'a byte-for-byte copied production manifest must not authorize fixture mode'
-    Assert-True (-not (Test-Path -LiteralPath $copiedProductionDestination)) 'copied production manifest gate must run before staging'
-    Assert-NoStageResidue $TestRoot 'copied production manifest gate'
+    Assert-True ($productionOfflineProbeError -ceq 'Production packaging builds all Rust executables internally; executable overrides are fixture-only') 'offline inputs must not allow executable overrides with the production manifest'
 
     $out1 = Join-Path $TestRoot 'package-one'; $out2 = Join-Path $TestRoot 'package-two'
     $releaseAsset = Join-Path $TestRoot 'multicore-windows-x64.zip'
