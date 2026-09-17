@@ -1,4 +1,5 @@
 use std::{
+    path::Path,
     sync::{Arc, OnceLock},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -194,9 +195,12 @@ pub(crate) struct CatalogPresentation {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SubscriptionPresentation {
-    pub(crate) source_name: String,
+    pub(crate) display_name: String,
     pub(crate) usage: String,
     pub(crate) expiry: String,
+    pub(crate) announcement_text: String,
+    pub(crate) announcement_tone: String,
+    pub(crate) service_logo_path: Option<String>,
     pub(crate) refresh_available: bool,
     pub(crate) refresh_pending: bool,
     pub(crate) error: Option<String>,
@@ -637,23 +641,33 @@ impl DesktopViewModel {
     pub(crate) fn subscription_presentation_at(&self, now_unix: u64) -> SubscriptionPresentation {
         let Some(info) = &self.subscription else {
             return SubscriptionPresentation {
-                source_name: "Подписка".into(),
+                display_name: "Подписка".into(),
                 usage: "Нет данных".into(),
                 expiry: "Добавьте ссылку".into(),
+                announcement_text: String::new(),
+                announcement_tone: "info".into(),
+                service_logo_path: None,
                 refresh_available: false,
                 refresh_pending: false,
                 error: self.subscription_refresh_error.clone(),
             };
         };
-        let usage = match (info.downloaded_bytes, info.total_bytes) {
-            (Some(downloaded), Some(total)) => {
-                format!("{} / {}", format_gib(downloaded), format_gib(total))
-            }
-            (Some(downloaded), None) => format_gib(downloaded),
-            _ => "Безлимит".into(),
+        let used_bytes =
+            info.used_bytes
+                .or_else(|| match (info.uploaded_bytes, info.downloaded_bytes) {
+                    (Some(uploaded), Some(downloaded)) => Some(uploaded.saturating_add(downloaded)),
+                    (Some(uploaded), None) => Some(uploaded),
+                    (None, Some(downloaded)) => Some(downloaded),
+                    (None, None) => None,
+                });
+        let usage = match (used_bytes, info.total_bytes) {
+            (Some(used), Some(total)) => format!("{} / {}", format_gib(used), format_gib(total)),
+            (Some(used), None) => format_gib(used),
+            (None, Some(total)) => format!("— / {}", format_gib(total)),
+            _ => "Нет данных".into(),
         };
         let expiry = info.expires_at_unix.map_or_else(
-            || "Без срока".into(),
+            || "Срок неизвестен".into(),
             |expires| {
                 if expires <= now_unix {
                     "Срок истёк".into()
@@ -663,10 +677,28 @@ impl DesktopViewModel {
                 }
             },
         );
+        let display_name = bounded_plain_text(&info.display_name, 128)
+            .filter(|name| !name.is_empty())
+            .or_else(|| bounded_plain_text(&info.source_name, 128))
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "Подписка".into());
+        let announcement_text = info
+            .announcement_text
+            .as_deref()
+            .and_then(|text| bounded_plain_text(text, 512))
+            .unwrap_or_default();
+        let announcement_tone = match info.announcement_tone.as_deref() {
+            Some("green" | "success") => "success",
+            Some("red" | "danger") => "danger",
+            _ => "info",
+        };
         SubscriptionPresentation {
-            source_name: info.source_name.clone(),
+            display_name,
             usage,
             expiry,
+            announcement_text,
+            announcement_tone: announcement_tone.into(),
+            service_logo_path: info.service_logo_path.as_deref().and_then(local_logo_path),
             refresh_available: info.refresh_available,
             refresh_pending: self
                 .active_mutation
@@ -1633,6 +1665,61 @@ fn format_gib(bytes: u64) -> String {
     format!("{:.1} GB", bytes as f64 / 1024_f64.powi(3))
 }
 
+fn bounded_plain_text(value: &str, max_chars: usize) -> Option<String> {
+    let filtered = value
+        .chars()
+        .filter(|character| {
+            !character.is_control()
+                && !matches!(
+                    character,
+                    '\u{061c}'
+                        | '\u{200e}'
+                        | '\u{200f}'
+                        | '\u{202a}'..='\u{202e}'
+                        | '\u{2066}'..='\u{2069}'
+                )
+        })
+        .collect::<String>();
+    let bounded = filtered
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(max_chars)
+        .collect::<String>();
+    (!bounded.is_empty()).then_some(bounded)
+}
+
+fn is_non_file_reference(value: &str) -> bool {
+    let lowercase = value.to_ascii_lowercase();
+    value.contains("://") || lowercase.starts_with("data:")
+}
+
+#[cfg(windows)]
+fn local_logo_path(value: &str) -> Option<String> {
+    use std::path::{Component, Prefix};
+
+    let value = value.trim();
+    if value.is_empty() || is_non_file_reference(value) {
+        return None;
+    }
+    let path = Path::new(value);
+    let is_local_drive = matches!(
+        path.components().next(),
+        Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::Disk(_))
+    );
+    (is_local_drive && path.is_absolute()).then(|| value.to_owned())
+}
+
+#[cfg(not(windows))]
+fn local_logo_path(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() || is_non_file_reference(value) {
+        return None;
+    }
+    Path::new(value).is_absolute().then(|| value.to_owned())
+}
+
 fn russian_days(days: u64) -> &'static str {
     let last_two = days % 100;
     let last = days % 10;
@@ -1997,22 +2084,130 @@ mod tests {
                 current_node: Some("Auto Sweden".into()),
                 subscription: Some(DaemonSubscriptionInfo {
                     source_name: "subscription.example".into(),
+                    display_name: "Provider One".into(),
+                    uploaded_bytes: Some(u64::MAX),
                     downloaded_bytes: Some(938_375_741_110),
+                    used_bytes: Some(u64::MAX),
                     total_bytes: None,
                     expires_at_unix: Some(1_792_851_157),
                     updated_at_unix: 1_789_405_200,
                     refresh_available: true,
+                    ..DaemonSubscriptionInfo::default()
                 }),
                 ..DaemonStatus::default()
             }),
         );
 
         let subscription = view_model.subscription_presentation_at(1_789_405_200);
-        assert_eq!(subscription.source_name, "subscription.example");
-        assert_eq!(subscription.usage, "873.9 GB");
+        assert_eq!(subscription.display_name, "Provider One");
+        assert_eq!(subscription.usage, "17179869184.0 GB");
         assert_eq!(subscription.expiry, "Осталось 40 дней");
         assert!(subscription.refresh_available);
         assert!(!format!("{subscription:?}").contains("https://"));
+    }
+
+    #[test]
+    fn subscription_presentation_does_not_invent_unlimited_usage_or_expiry() {
+        let mut client = MockDaemonClient::ready();
+        client.status.subscription = Some(DaemonSubscriptionInfo::default());
+        let mut view_model = DesktopViewModel::new(Arc::new(client));
+        let refresh = view_model.begin_refresh();
+        let status = view_model.daemon_client().status().expect("status");
+        view_model.finish_refresh(refresh, Ok(status));
+
+        let subscription = view_model.subscription_presentation_at(0);
+        assert_eq!(subscription.usage, "Нет данных");
+        assert_eq!(subscription.expiry, "Срок неизвестен");
+    }
+
+    #[test]
+    fn subscription_presentation_preserves_legitimate_total_only_metadata() {
+        let mut client = MockDaemonClient::ready();
+        client.status.subscription = Some(DaemonSubscriptionInfo {
+            total_bytes: Some(10 * 1024 * 1024 * 1024),
+            ..DaemonSubscriptionInfo::default()
+        });
+        let mut view_model = DesktopViewModel::new(Arc::new(client));
+        let refresh = view_model.begin_refresh();
+        let status = view_model.daemon_client().status().expect("status");
+        view_model.finish_refresh(refresh, Ok(status));
+
+        let subscription = view_model.subscription_presentation_at(0);
+        assert_eq!(subscription.usage, "— / 10.0 GB");
+        assert_eq!(subscription.expiry, "Срок неизвестен");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn local_logo_path_accepts_only_fully_qualified_local_drive_paths_on_windows() {
+        assert_eq!(
+            local_logo_path(r"C:\cache\provider\logo.png").as_deref(),
+            Some(r"C:\cache\provider\logo.png")
+        );
+        for rejected in [
+            r"\\server\share\logo.png",
+            r"\\?\UNC\server\share\logo.png",
+            r"\\.\device\logo.png",
+            r"\rooted\logo.png",
+            r"C:relative\logo.png",
+            "https://provider.invalid/logo.png",
+            "HTTP://provider.invalid/logo.png",
+            "data:image/png;base64,AA==",
+        ] {
+            assert_eq!(local_logo_path(rejected), None, "accepted {rejected}");
+        }
+    }
+
+    #[test]
+    fn subscription_presentation_bounds_metadata_and_rejects_remote_logo_urls() {
+        let mut client = MockDaemonClient::ready();
+        client.status.subscription = Some(DaemonSubscriptionInfo {
+            source_name: "fallback.example".into(),
+            display_name: format!("  {}  ", "P".repeat(200)),
+            announcement_text: Some(format!("  Notice\n{}  ", "x".repeat(600))),
+            announcement_tone: Some("provider-purple".into()),
+            service_logo_path: Some("https://provider.invalid/logo.png".into()),
+            ..DaemonSubscriptionInfo::default()
+        });
+        let mut view_model = DesktopViewModel::new(Arc::new(client));
+        let refresh = view_model.begin_refresh();
+        let status = view_model.daemon_client().status().expect("status");
+        view_model.finish_refresh(refresh, Ok(status));
+
+        let subscription = view_model.subscription_presentation_at(0);
+        assert_eq!(subscription.display_name.chars().count(), 128);
+        assert_eq!(subscription.announcement_text.chars().count(), 512);
+        assert_eq!(subscription.announcement_tone, "info");
+        assert_eq!(subscription.service_logo_path, None);
+    }
+
+    #[test]
+    fn subscription_presentation_falls_back_to_host_and_keeps_local_logo_path() {
+        let logo = tempfile::tempdir()
+            .expect("logo temp directory")
+            .path()
+            .join("provider.png");
+        let mut client = MockDaemonClient::ready();
+        client.status.subscription = Some(DaemonSubscriptionInfo {
+            source_name: "fallback.example".into(),
+            display_name: " \n ".into(),
+            uploaded_bytes: Some(u64::MAX),
+            downloaded_bytes: Some(42),
+            total_bytes: Some(u64::MAX),
+            announcement_tone: Some("red".into()),
+            service_logo_path: Some(logo.to_string_lossy().into_owned()),
+            ..DaemonSubscriptionInfo::default()
+        });
+        let mut view_model = DesktopViewModel::new(Arc::new(client));
+        let refresh = view_model.begin_refresh();
+        let status = view_model.daemon_client().status().expect("status");
+        view_model.finish_refresh(refresh, Ok(status));
+
+        let subscription = view_model.subscription_presentation_at(0);
+        assert_eq!(subscription.display_name, "fallback.example");
+        assert_eq!(subscription.usage, "17179869184.0 GB / 17179869184.0 GB");
+        assert_eq!(subscription.announcement_tone, "danger");
+        assert_eq!(subscription.service_logo_path.as_deref(), logo.to_str());
     }
 
     #[test]
@@ -3167,6 +3362,7 @@ mod tests {
     fn desktop_control_center_source_contract() {
         let source = include_str!("../ui/app.slint");
         let components = include_str!("../ui/components.slint");
+        let main = include_str!("main.rs");
 
         let small_action = source
             .split("component SmallAction")
@@ -3180,8 +3376,43 @@ mod tests {
         assert!(source.contains("connection-strip := Rectangle"));
         assert!(source.contains("height: 96px;"));
         assert!(source.contains("power-action := FocusScope"));
-        assert!(source.contains("width: 68px;\n                                height: 68px;"));
+        assert!(source.contains("width: 72px;"));
+        assert!(source.contains("height: 72px;"));
         assert!(source.contains("accessible-label: root.primary-label;"));
+        assert!(source.contains("in property <image> service-logo;"));
+        assert!(source.contains("in property <bool> has-service-logo: false;"));
+        assert!(source.contains("if root.has-service-logo: Image"));
+        assert!(source.contains("if !root.has-service-logo: Image"));
+        assert!(source.contains("@image-url(\"../assets/power.svg\")"));
+        assert!(source.contains("subscription-announcement-text"));
+        assert!(source.contains("subscription-announcement-tone"));
+        for semantic_icon in [
+            "announcement-info.svg",
+            "announcement-success.svg",
+            "announcement-danger.svg",
+        ] {
+            assert!(source.contains(semantic_icon));
+        }
+        let announcement = source
+            .split("if root.subscription-announcement-text != \"\": Rectangle")
+            .nth(1)
+            .and_then(|source| source.split("inline-routes := Rectangle").next())
+            .expect("announcement strip source");
+        assert_eq!(announcement.matches("accessible-role: none;").count(), 3);
+        assert!(source.contains("in property <string> subscription-title:"));
+        assert!(source.contains("text: root.subscription-title;"));
+        assert!(!source.to_ascii_lowercase().contains("text: \"gate8\""));
+        assert!(!source.to_ascii_lowercase().contains("text: \"work\""));
+        assert!(main.contains("slint::Image::load_from_path(Path::new(path))"));
+        assert!(main.contains("ui.set_has_service_logo(service_logo.is_some());"));
+        assert!(main.contains("ui.set_service_logo(service_logo.unwrap_or_default());"));
+        let snapshot = main
+            .split("struct UiSnapshot")
+            .nth(1)
+            .and_then(|source| source.split("fn main()").next())
+            .expect("UiSnapshot source");
+        assert!(!snapshot.contains("slint::Image"));
+        assert!(!main.contains("Image::load_from_path(Path::new(\"http"));
         assert!(!source.contains("if root.has-profile: PrimaryAction"));
         assert!(components.contains("border-radius: 14px;"));
         assert!(components.contains("border-radius: 6px;"));
@@ -3641,7 +3872,9 @@ mod tests {
             "read-only and selected route rows must remain fully legible"
         );
         assert!(route.contains("accessible-enabled: root.enabled;"));
-        assert!(route.contains("TouchArea {\n            enabled: root.enabled;"));
+        assert!(route.contains("TouchArea"));
+        assert!(route.contains("enabled: root.enabled;"));
+        assert!(route.contains("clicked => { root.activated(); }"));
         assert!(!route.contains("parent.width - 136px"));
 
         let details = component_source("DetailsSurface", None);

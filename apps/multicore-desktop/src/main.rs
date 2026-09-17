@@ -10,6 +10,7 @@ mod view_model;
 mod windows_settings;
 
 use std::ffi::{OsStr, OsString};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -1128,9 +1129,18 @@ fn apply_snapshot(ui: &AppWindow, snapshot: &UiSnapshot) {
     );
     ui.set_import_pending(snapshot.import_pending);
     ui.set_import_error(snapshot.import_error.clone().into());
-    ui.set_subscription_source(snapshot.subscription.source_name.clone().into());
+    ui.set_subscription_title(snapshot.subscription.display_name.clone().into());
     ui.set_subscription_usage(snapshot.subscription.usage.clone().into());
     ui.set_subscription_expiry(snapshot.subscription.expiry.clone().into());
+    ui.set_subscription_announcement_text(snapshot.subscription.announcement_text.clone().into());
+    ui.set_subscription_announcement_tone(snapshot.subscription.announcement_tone.clone().into());
+    let service_logo = snapshot
+        .subscription
+        .service_logo_path
+        .as_deref()
+        .and_then(|path| slint::Image::load_from_path(Path::new(path)).ok());
+    ui.set_has_service_logo(service_logo.is_some());
+    ui.set_service_logo(service_logo.unwrap_or_default());
     ui.set_subscription_refresh_available(snapshot.subscription.refresh_available);
     ui.set_subscription_refresh_enabled(
         presentation.has_profile && !presentation.is_connected && !presentation.is_busy,

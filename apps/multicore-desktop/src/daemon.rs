@@ -37,13 +37,35 @@ pub struct DaemonSubscriptionInfo {
     #[serde(default)]
     pub source_name: String,
     #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub uploaded_bytes: Option<u64>,
+    #[serde(default)]
     pub downloaded_bytes: Option<u64>,
+    #[serde(default)]
+    pub used_bytes: Option<u64>,
     #[serde(default)]
     pub total_bytes: Option<u64>,
     #[serde(default)]
     pub expires_at_unix: Option<u64>,
     #[serde(default)]
     pub updated_at_unix: u64,
+    #[serde(default)]
+    pub refresh_interval_secs: Option<u64>,
+    #[serde(default)]
+    pub announcement_text: Option<String>,
+    #[serde(default)]
+    pub announcement_action_label: Option<String>,
+    #[serde(default)]
+    pub announcement_tone: Option<String>,
+    #[serde(default)]
+    pub home_available: bool,
+    #[serde(default)]
+    pub support_available: bool,
+    #[serde(default)]
+    pub announcement_action_available: bool,
+    #[serde(default)]
+    pub service_logo_path: Option<String>,
     #[serde(default)]
     pub refresh_available: bool,
 }
@@ -723,6 +745,66 @@ mod http_tests {
     };
 
     use super::*;
+
+    #[test]
+    fn subscription_info_deserializes_legacy_payload_with_safe_defaults() {
+        let info: DaemonSubscriptionInfo = serde_json::from_value(serde_json::json!({
+            "source_name": "legacy.example",
+            "downloaded_bytes": 7,
+            "total_bytes": 10,
+            "expires_at_unix": null,
+            "updated_at_unix": 123,
+            "refresh_available": true
+        }))
+        .expect("legacy subscription DTO");
+
+        assert_eq!(info.display_name, "");
+        assert_eq!(info.uploaded_bytes, None);
+        assert_eq!(info.used_bytes, None);
+        assert_eq!(info.refresh_interval_secs, None);
+        assert_eq!(info.announcement_text, None);
+        assert_eq!(info.announcement_action_label, None);
+        assert_eq!(info.announcement_tone, None);
+        assert!(!info.home_available);
+        assert!(!info.support_available);
+        assert!(!info.announcement_action_available);
+        assert_eq!(info.service_logo_path, None);
+        assert!(info.refresh_available);
+    }
+
+    #[test]
+    fn subscription_info_deserializes_safe_metadata_without_any_url_field() {
+        let json = serde_json::json!({
+            "source_name": "fallback.example",
+            "display_name": "Provider",
+            "uploaded_bytes": 4,
+            "downloaded_bytes": 8,
+            "used_bytes": 12,
+            "total_bytes": 100,
+            "expires_at_unix": 456,
+            "updated_at_unix": 123,
+            "refresh_interval_secs": 900,
+            "announcement_text": "Maintenance",
+            "announcement_action_label": "Details",
+            "announcement_tone": "blue",
+            "home_available": true,
+            "support_available": true,
+            "announcement_action_available": true,
+            "service_logo_path": "C:\\\\cache\\\\provider.png",
+            "refresh_available": true
+        });
+        let info: DaemonSubscriptionInfo =
+            serde_json::from_value(json.clone()).expect("current subscription DTO");
+
+        assert_eq!(info.display_name, "Provider");
+        assert_eq!(info.used_bytes, Some(12));
+        assert_eq!(info.announcement_tone.as_deref(), Some("blue"));
+        assert!(info.home_available);
+        assert!(info.support_available);
+        assert!(info.announcement_action_available);
+        assert!(info.service_logo_path.is_some());
+        assert!(json.get("url").is_none());
+    }
 
     fn start_server(request_count: usize) -> (String, thread::JoinHandle<Vec<String>>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind test HTTP server");

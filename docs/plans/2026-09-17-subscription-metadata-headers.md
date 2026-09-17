@@ -90,10 +90,10 @@
 
 **Does NOT cover:** fetching remote logos, arbitrary provider colors, multiple persisted profiles, or opening URLs before an explicit authenticated action endpoint exists.
 
-- [ ] **Step 1: Write failing Rust/source-contract tests** requiring `profile-title` presentation, source-host fallback, saturating used traffic, announcement state, semantic tone, cached service logo inside the connection control with built-in fallback, stable empty states, and no literal `gate8`/`work` labels.
-- [ ] **Step 2: Verify RED** with `cargo test -p multicore-desktop view_model --locked`; expect missing presentation fields and Slint properties.
-- [ ] **Step 3: Implement the presentation mapping** and a compact announcement strip below the vector-ready subscription shelf. Keep provider text plain, elided/wrapped within bounds, and keyboard/accessibility semantics intact.
-- [ ] **Step 4: Verify GREEN** with `cargo test -p multicore-desktop --lib --locked` and `cargo check -p multicore-desktop --locked`.
+- [x] **Step 1: Write failing Rust/source-contract tests** requiring `profile-title` presentation, source-host fallback, saturating used traffic, announcement state, semantic tone, cached service logo inside the connection control with built-in fallback, stable empty states, and no literal `gate8`/`work` labels.
+- [x] **Step 2: Verify RED** with `cargo test -p multicore-desktop view_model --locked`; expect missing presentation fields and Slint properties.
+- [x] **Step 3: Implement the presentation mapping** and a compact announcement strip below the vector-ready subscription shelf. Keep provider text plain, elided/wrapped within bounds, and keyboard/accessibility semantics intact.
+- [x] **Step 4: Verify GREEN** with `cargo test -p multicore-desktop --lib --locked` and `cargo check -p multicore-desktop --locked`.
 
 ### Task 5: Integrate automatic latency and the refreshed visual shell
 

@@ -349,9 +349,13 @@ export component AppWindow inherits Window {
     in property <string> status-tone: "neutral";
     in property <bool> import-pending: false;
     in property <string> import-error;
-    in property <string> subscription-source: "Подписка";
+    in property <string> subscription-title: "Подписка";
     in property <string> subscription-usage: "Нет данных";
     in property <string> subscription-expiry: "Добавьте ссылку";
+    in property <image> service-logo;
+    in property <bool> has-service-logo: false;
+    in property <string> subscription-announcement-text;
+    in property <string> subscription-announcement-tone: "info";
     in property <bool> subscription-refresh-available: false;
     in property <bool> subscription-refresh-enabled: false;
     in property <bool> subscription-refresh-pending: false;
@@ -531,12 +535,15 @@ export component AppWindow inherits Window {
                         background: Theme.surface;
                         border-radius: 18px;
                         HorizontalLayout {
-                            padding: 14px;
+                            padding-left: 14px;
+                            padding-right: 14px;
+                            padding-top: 12px;
+                            padding-bottom: 12px;
                             spacing: 16px;
                             alignment: center;
                             if root.has-profile: power-action := FocusScope {
-                                width: 68px;
-                                height: 68px;
+                                width: 72px;
+                                height: 72px;
                                 enabled: root.primary-enabled;
                                 focus-on-click: true;
                                 focus-on-tab-navigation: true;
@@ -559,19 +566,29 @@ export component AppWindow inherits Window {
                                 power-button := Rectangle {
                                     x: (parent.width - self.width) / 2;
                                     y: (parent.height - self.height) / 2;
-                                    width: power-touch.pressed ? 65px : 68px;
-                                    height: power-touch.pressed ? 65px : 68px;
+                                    width: power-touch.pressed ? 69px : 72px;
+                                    height: power-touch.pressed ? 69px : 72px;
                                     border-radius: self.width / 2;
+                                    clip: true;
                                     background: root.status-tone == "success" ? #3ccb7f20 : root.status-tone == "danger" ? #f06a6a1f : #4c9dff1c;
                                     border-color: power-action.has-focus ? Theme.focus : root.status-tone == "success" ? Theme.accent-green : root.status-tone == "danger" ? Theme.error : Theme.accent-blue;
                                     border-width: power-action.has-focus ? Theme.focus-width : 1px;
                                     opacity: root.primary-enabled ? 1 : 0.45;
 
-                                    Image {
-                                        x: (parent.width - 26px) / 2;
-                                        y: (parent.height - 26px) / 2 - 1px;
-                                        width: 26px;
-                                        height: 26px;
+                                    if root.has-service-logo: Image {
+                                        x: 10px;
+                                        y: 10px;
+                                        width: parent.width - 20px;
+                                        height: parent.height - 20px;
+                                        source: root.service-logo;
+                                        image-fit: contain;
+                                        accessible-role: none;
+                                    }
+                                    if !root.has-service-logo: Image {
+                                        x: (parent.width - 28px) / 2;
+                                        y: (parent.height - 28px) / 2 - 1px;
+                                        width: 28px;
+                                        height: 28px;
                                         source: @image-url("../assets/power.svg");
                                         image-fit: contain;
                                         accessible-role: none;
@@ -614,11 +631,55 @@ export component AppWindow inherits Window {
                             spacing: 12px;
                             VerticalLayout {
                                 spacing: 4px;
-                                Text { text: root.subscription-source; color: Theme.text-primary; font-size: Theme.type-label-size; font-weight: Theme.weight-semibold; overflow: elide; }
+                                Text { text: root.subscription-title; color: Theme.text-primary; font-size: Theme.type-label-size; font-weight: Theme.weight-semibold; overflow: elide; }
                                 Text { text: root.subscription-usage + " · " + root.subscription-expiry; color: Theme.text-muted; font-size: Theme.type-metadata-size; overflow: elide; }
                                 if root.subscription-refresh-error != "": Text { text: root.subscription-refresh-error; color: Theme.error; font-size: Theme.type-metadata-size; overflow: elide; }
                             }
                             SmallAction { label: root.subscription-refresh-pending ? "Обновляем…" : "Обновить"; enabled: root.subscription-refresh-enabled && !root.subscription-refresh-pending; activated => { root.refresh-subscription(); } }
+                        }
+                    }
+
+                    if root.subscription-announcement-text != "": Rectangle {
+                        height: 44px;
+                        background: root.subscription-announcement-tone == "danger" ? #f06a6a12 : root.subscription-announcement-tone == "success" ? #3ccb7f12 : #4c9dff12;
+                        border-radius: 12px;
+                        border-color: root.subscription-announcement-tone == "danger" ? #f06a6a66 : root.subscription-announcement-tone == "success" ? #3ccb7f66 : #4c9dff66;
+                        border-width: 1px;
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            padding-top: 7px;
+                            padding-bottom: 7px;
+                            spacing: 10px;
+                            if root.subscription-announcement-tone == "danger": Image {
+                                width: 18px;
+                                height: 18px;
+                                source: @image-url("../assets/announcement-danger.svg");
+                                image-fit: contain;
+                                accessible-role: none;
+                            }
+                            if root.subscription-announcement-tone == "success": Image {
+                                width: 18px;
+                                height: 18px;
+                                source: @image-url("../assets/announcement-success.svg");
+                                image-fit: contain;
+                                accessible-role: none;
+                            }
+                            if root.subscription-announcement-tone != "danger" && root.subscription-announcement-tone != "success": Image {
+                                width: 18px;
+                                height: 18px;
+                                source: @image-url("../assets/announcement-info.svg");
+                                image-fit: contain;
+                                accessible-role: none;
+                            }
+                            Text {
+                                text: root.subscription-announcement-text;
+                                color: Theme.text-secondary;
+                                font-size: Theme.type-metadata-size;
+                                wrap: word-wrap;
+                                overflow: elide;
+                                vertical-alignment: center;
+                            }
                         }
                     }
 
@@ -768,7 +829,7 @@ export component AppWindow inherits Window {
                         VerticalLayout {
                             spacing: 4px;
                             Text { text: "Подписка"; color: Theme.text-primary; font-size: Theme.type-label-size; font-weight: Theme.weight-semibold; }
-                            Text { text: root.subscription-source; color: Theme.text-muted; font-size: Theme.type-metadata-size; overflow: elide; }
+                            Text { text: root.subscription-title; color: Theme.text-muted; font-size: Theme.type-metadata-size; overflow: elide; }
                         }
                         SmallAction { label: root.replace-editor-open ? "Скрыть" : "Изменить URL"; activated => { root.replace-editor-open = !root.replace-editor-open; } }
                     }
