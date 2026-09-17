@@ -20,11 +20,11 @@
 - Create: `apps/multicore-core-host/src/main.rs`
 - Modify: `scripts/test-windows-elevation-manifest.ps1`
 
-- [ ] Add failing tests requiring desktop/daemon/updater `asInvoker` and core-host `requireAdministrator`.
-- [ ] Add the minimal host crate and embed numeric RT_MANIFEST resource 1.
-- [ ] Change production desktop manifest to `asInvoker`.
-- [ ] Keep this branch unreleasable until Tasks 2-4 are complete because connect otherwise lacks TUN rights.
-- [ ] Run manifest contracts and `cargo check --workspace --all-targets --locked`.
+- [x] Add failing tests requiring desktop/daemon/updater `asInvoker` and core-host `requireAdministrator`.
+- [x] Add the minimal host crate and embed numeric RT_MANIFEST resource 1.
+- [x] Change production desktop manifest to `asInvoker`.
+- [x] Keep this branch unreleasable until Tasks 2-4 are complete because connect otherwise lacks TUN rights.
+- [x] Run manifest contracts and `cargo check --workspace --all-targets --locked`.
 
 ### Task 2: Add a bounded broker protocol and authenticated named pipe
 
@@ -94,4 +94,3 @@
 - [ ] Manually accept and cancel UAC from Connect; confirm cancellation returns to Ready, acceptance connects, and Disconnect leaves no host/core processes.
 - [ ] Run the installed-update preservation smoke and the full workspace format/test/Clippy/package suite.
 - [ ] Record the unsigned-preview security limitation explicitly; do not label the writable portable package security-complete.
-
