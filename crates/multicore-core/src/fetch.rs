@@ -5,11 +5,11 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use reqwest::header::{ACCEPT, HeaderMap, USER_AGENT};
+use reqwest::header::{ACCEPT, HeaderMap, HeaderValue, USER_AGENT};
 use serde_json::value::RawValue;
 use thiserror::Error;
 
-use crate::{MAX_CONFIG_BYTES, Snapshot, SnapshotSink};
+use crate::{DeviceIdentity, MAX_CONFIG_BYTES, Snapshot, SnapshotSink};
 
 pub const UA_NATIVE: &str = "multicore-json-massive";
 pub const UA_MIHOMO: &str = "multicore-mihomo";
@@ -161,20 +161,29 @@ pub struct ReqwestHttpClient {
 }
 
 impl ReqwestHttpClient {
-    pub fn new() -> Result<Self, FetchError> {
+    pub fn new(identity: DeviceIdentity) -> Result<Self, FetchError> {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-hwid",
+            HeaderValue::from_str(identity.hwid()).map_err(|_| FetchError::Network)?,
+        );
+        headers.insert("x-device-os", HeaderValue::from_static("windows"));
+        headers.insert(
+            "x-ver-os",
+            HeaderValue::from_str(identity.os_version()).map_err(|_| FetchError::Network)?,
+        );
+        headers.insert(
+            "x-device-model",
+            HeaderValue::from_str(identity.device_model()).map_err(|_| FetchError::Network)?,
+        );
         let client = reqwest::Client::builder()
+            .default_headers(headers)
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(30))
             .build()
             .map_err(|_| FetchError::Network)?;
         Ok(Self { client })
-    }
-}
-
-impl Default for ReqwestHttpClient {
-    fn default() -> Self {
-        Self::new().expect("static HTTP client configuration must be valid")
     }
 }
 

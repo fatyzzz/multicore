@@ -7,9 +7,9 @@ use std::{
 };
 
 use multicore_core::{
-    CoreLogBuffer, MihomoRuntimeControl, PersistentSnapshotStore, ReqwestHttpClient, RuntimePaths,
-    SidecarProcessController, Snapshot, SubscriptionFetcher, default_ipv4_interface,
-    stage_runtime_with_mihomo_control, xray_outbound_server_domains,
+    CoreLogBuffer, DeviceIdentity, MihomoRuntimeControl, PersistentSnapshotStore,
+    ReqwestHttpClient, RuntimePaths, SidecarProcessController, Snapshot, SubscriptionFetcher,
+    default_ipv4_interface, stage_runtime_with_mihomo_control, xray_outbound_server_domains,
 };
 use multicore_daemon::{
     BackendError, CoreBackend, MihomoHttpSelector, PreparedController, bind_loopback,
@@ -23,6 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| "127.0.0.1:8787".to_owned())
         .parse()?;
     let data_directory = PathBuf::from(required_env("MULTICORE_DAEMON_DATA_DIR")?);
+    let device_identity = DeviceIdentity::load_or_create(&data_directory)?;
     let xray_binary = PathBuf::from(required_env("MULTICORE_XRAY_BIN")?);
     let mihomo_binary = PathBuf::from(required_env("MULTICORE_MIHOMO_BIN")?);
     let mihomo_controller_address: SocketAddr = env::var("MULTICORE_MIHOMO_CONTROLLER_ADDR")
@@ -50,7 +51,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     drop(mihomo_controller_secret);
 
     let store = PersistentSnapshotStore::open(data_directory.join("snapshots"))?;
-    let fetcher = SubscriptionFetcher::new(ReqwestHttpClient::new()?);
+    let fetcher = SubscriptionFetcher::new(ReqwestHttpClient::new(device_identity)?);
     let runtime_root = data_directory.join("runtime");
     let core_logs = Arc::new(CoreLogBuffer::persistent_or_memory(
         data_directory.join("logs").join("latest-core.log"),

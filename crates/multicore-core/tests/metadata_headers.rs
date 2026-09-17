@@ -122,6 +122,7 @@ async fn title_decodes_plain_standard_and_urlsafe_base64_with_service_name_fallb
 
 #[tokio::test]
 async fn reqwest_transport_accepts_raw_utf8_header_bytes() {
+    let root = TempDirectory::new();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let body = bundle();
@@ -140,7 +141,8 @@ async fn reqwest_transport_accepts_raw_utf8_header_bytes() {
         stream.write_all(&response).await.unwrap();
     });
     let store = AtomicSnapshot::default();
-    SubscriptionFetcher::new(ReqwestHttpClient::new().unwrap())
+    let identity = multicore_core::DeviceIdentity::load_or_create(&root.0).unwrap();
+    SubscriptionFetcher::new(ReqwestHttpClient::new(identity).unwrap())
         .refresh(&format!("http://{address}/subscription"), &store)
         .await
         .unwrap();

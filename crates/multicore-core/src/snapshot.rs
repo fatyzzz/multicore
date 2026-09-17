@@ -1273,24 +1273,24 @@ fn is_runtime_generation_name(name: &str) -> bool {
 }
 
 #[cfg(unix)]
-fn secure_directory(path: &Path) -> io::Result<()> {
+pub(crate) fn secure_directory(path: &Path) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(path, fs::Permissions::from_mode(0o700))
 }
 
 #[cfg(unix)]
-fn secure_file(path: &Path) -> io::Result<()> {
+pub(crate) fn secure_file(path: &Path) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(path, fs::Permissions::from_mode(0o600))
 }
 
 #[cfg(windows)]
-fn secure_directory(path: &Path) -> io::Result<()> {
+pub(crate) fn secure_directory(path: &Path) -> io::Result<()> {
     apply_owner_only_acl(path, true)
 }
 
 #[cfg(windows)]
-fn secure_file(path: &Path) -> io::Result<()> {
+pub(crate) fn secure_file(path: &Path) -> io::Result<()> {
     apply_owner_only_acl(path, false)
 }
 
@@ -1384,7 +1384,7 @@ fn apply_owner_only_acl(path: &Path, inheritable: bool) -> io::Result<()> {
 }
 
 #[cfg(not(any(unix, windows)))]
-fn secure_directory(_path: &Path) -> io::Result<()> {
+pub(crate) fn secure_directory(_path: &Path) -> io::Result<()> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "owner-only filesystem protection is unsupported on this platform",
@@ -1392,7 +1392,7 @@ fn secure_directory(_path: &Path) -> io::Result<()> {
 }
 
 #[cfg(not(any(unix, windows)))]
-fn secure_file(_path: &Path) -> io::Result<()> {
+pub(crate) fn secure_file(_path: &Path) -> io::Result<()> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "owner-only filesystem protection is unsupported on this platform",
@@ -1400,12 +1400,12 @@ fn secure_file(_path: &Path) -> io::Result<()> {
 }
 
 #[cfg(unix)]
-fn sync_directory(path: &Path) -> Result<(), io::Error> {
+pub(crate) fn sync_directory(path: &Path) -> Result<(), io::Error> {
     fs::File::open(path)?.sync_all()
 }
 
 #[cfg(windows)]
-fn sync_directory(_path: &Path) -> Result<(), io::Error> {
+pub(crate) fn sync_directory(_path: &Path) -> Result<(), io::Error> {
     // Stable std cannot open Windows directories with FILE_FLAG_BACKUP_SEMANTICS.
     // Both payload files are flushed with FlushFileBuffers before the atomic rename.
     Ok(())

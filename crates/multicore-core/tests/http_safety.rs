@@ -1,10 +1,13 @@
 use std::{
+    fs,
     io::{Read, Write},
     net::{TcpListener, TcpStream},
     thread,
 };
 
-use multicore_core::{FetchError, HttpClient, MAX_CONFIG_BYTES, ReqwestHttpClient, UA_MIHOMO};
+use multicore_core::{
+    DeviceIdentity, FetchError, HttpClient, MAX_CONFIG_BYTES, ReqwestHttpClient, UA_MIHOMO,
+};
 
 fn serve_once(response: String) -> (String, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -23,6 +26,20 @@ fn read_request(stream: &mut TcpStream) {
     let _ = stream.read(&mut request).unwrap();
 }
 
+fn client() -> ReqwestHttpClient {
+    let mut suffix = [0_u8; 8];
+    getrandom::fill(&mut suffix).unwrap();
+    let directory = std::env::temp_dir().join(format!(
+        "multicore-http-safety-{}-{}",
+        std::process::id(),
+        u64::from_ne_bytes(suffix),
+    ));
+    fs::create_dir(&directory).unwrap();
+    let identity = DeviceIdentity::load_or_create(&directory).unwrap();
+    fs::remove_dir_all(directory).unwrap();
+    ReqwestHttpClient::new(identity).unwrap()
+}
+
 #[tokio::test]
 async fn default_http_client_never_follows_redirects() {
     let redirect_target = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -32,10 +49,7 @@ async fn default_http_client_never_follows_redirects() {
         "HTTP/1.1 302 Found\r\nLocation: http://{target}/must-not-receive-secret\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
     ));
 
-    let response = ReqwestHttpClient::default()
-        .get(&url, UA_MIHOMO)
-        .await
-        .unwrap();
+    let response = client().get(&url, UA_MIHOMO).await.unwrap();
     server.join().unwrap();
     assert_eq!(response.status, 302);
     assert!(redirect_target.accept().is_err());
@@ -48,9 +62,7 @@ async fn massive_response_with_dishonest_oversized_length_is_rejected() {
         MAX_CONFIG_BYTES + 1
     ));
 
-    let result = ReqwestHttpClient::default()
-        .get(&url, multicore_core::UA_NATIVE)
-        .await;
+    let result = client().get(&url, multicore_core::UA_NATIVE).await;
     server.join().unwrap();
     assert_eq!(result, Err(FetchError::TooLarge));
 }
@@ -74,9 +86,7 @@ async fn massive_stream_without_content_length_is_still_capped_at_32_mib() {
     });
 
     let url = format!("http://{address}/subscription");
-    let result = ReqwestHttpClient::default()
-        .get(&url, multicore_core::UA_NATIVE)
-        .await;
+    let result = client().get(&url, multicore_core::UA_NATIVE).await;
     server.join().unwrap();
     assert_eq!(result, Err(FetchError::TooLarge));
 }

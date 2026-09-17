@@ -1,3 +1,4 @@
+mod device_identity;
 mod event;
 mod fetch;
 mod input;
@@ -7,6 +8,7 @@ mod snapshot;
 mod state;
 mod supervisor;
 
+pub use device_identity::{DeviceIdentity, DeviceIdentityError, derive_incy_hwid, is_valid_hwid};
 pub use event::{Component, Event, Severity};
 pub use fetch::{
     FetchError, HttpClient, HttpResponse, ReqwestHttpClient, SubscriptionFetcher, UA_MIHOMO,

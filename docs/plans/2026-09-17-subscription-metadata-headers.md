@@ -57,11 +57,11 @@
 
 **Does NOT cover:** sending raw MachineGuid/hostname/user values, advertising other clients' User-Agents, or exposing HWID in UI/logs/API.
 
-- [ ] **Step 1: Write failing tests** for uppercase UUID formatting, deterministic documented derivation, owner-only atomic persistence, corrupt-file recovery, and exact `x-hwid`/`x-device-os`/`x-ver-os`/`x-device-model` headers on all three User-Agent requests.
-- [ ] **Step 2: Verify RED** with `cargo test -p multicore-core --test device_identity --locked`; expect the identity module and request headers to be absent.
-- [ ] **Step 3: Implement identity creation/loading** with SHA-256 derivation on Windows, secure random fallback, atomic publication and bounded descriptors.
-- [ ] **Step 4: Inject the same identity into massive/Mihomo/Xray requests** without logging it or changing massive terminality.
-- [ ] **Step 5: Verify GREEN** with the target test and `cargo test -p multicore-core --lib --locked`.
+- [x] **Step 1: Write failing tests** for uppercase UUID formatting, deterministic documented derivation, owner-only atomic persistence, corrupt-file recovery, and exact `x-hwid`/`x-device-os`/`x-ver-os`/`x-device-model` headers on all three User-Agent requests.
+- [x] **Step 2: Verify RED** with `cargo test -p multicore-core --test device_identity --locked`; expect the identity module and request headers to be absent.
+- [x] **Step 3: Implement identity creation/loading** with SHA-256 derivation on Windows, secure random fallback, atomic publication and bounded descriptors.
+- [x] **Step 4: Inject the same identity into massive/Mihomo/Xray requests** without logging it or changing massive terminality.
+- [x] **Step 5: Verify GREEN** with the target test and `cargo test -p multicore-core --lib --locked`.
 
 ### Task 3: Cache and project safe metadata and service logo
 
