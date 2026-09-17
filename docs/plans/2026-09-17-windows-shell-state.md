@@ -254,7 +254,7 @@ git commit -m "feat(desktop): add native resize and tray-first window lifecycle"
 
 **Does NOT cover:** The waves do not carry status meaning, accept input, use saturated color, or animate while hidden/inactive/reduced-motion is active.
 
-- [ ] **Step 1: Add a failing UI contract test**
+- [x] **Step 1: Add a failing UI contract test**
 
 ```rust
 #[test]
@@ -269,25 +269,25 @@ fn home_background_is_bounded_pausable_and_non_interactive() {
 }
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cargo test -p multicore-desktop view_model::tests::home_background_is_bounded_pausable_and_non_interactive --locked`
 Expected: FAIL because ambient properties and the wave layer do not exist.
 
-- [ ] **Step 3: Implement the wave layer behind Home content**
+- [x] **Step 3: Implement the wave layer behind Home content**
 
 Add `ambient-background-enabled`, `shell-active`, and `reduced-motion` inputs. Put two clipped, broad gray-white vector/path waves as the first children of `main-pane`; use opacities `0.02` and `0.03`, no blur, and at most 10 px translation. A 12-second Slint timer toggles the phase only when all three gates permit motion; the x/y animations use ease-in-out and 12–18 second durations. All existing cards remain opaque enough to preserve contrast and every wave has no `TouchArea`.
 
-- [ ] **Step 4: Wire visibility and reduced-motion state**
+- [x] **Step 4: Wire visibility and reduced-motion state**
 
 Set `shell-active` false before hiding/minimizing and true on restore/show. On Windows, read `SPI_GETCLIENTAREAANIMATION` once during startup; set `reduced-motion = true` when client-area animation is disabled. Persist only the user-facing ambient enabled setting.
 
-- [ ] **Step 5: Run compile and UI tests**
+- [x] **Step 5: Run compile and UI tests**
 
 Run: `cargo test -p multicore-desktop --all-targets --locked`
 Expected: PASS and Slint compilation succeeds at minimum dimensions.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add apps/multicore-desktop/ui/app.slint apps/multicore-desktop/src/main.rs apps/multicore-desktop/src/view_model.rs
