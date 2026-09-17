@@ -8,7 +8,9 @@ param(
     [string]$UpdaterExecutablePath,
     [string]$UpdateRepository,
     [string]$ReleaseAssetPath,
-    [switch]$AssertReleaseReady
+    [switch]$AssertReleaseReady,
+    [Parameter(DontShow = $true)]
+    [switch]$FixtureContractMode
 )
 
 $ErrorActionPreference = 'Stop'
@@ -22,8 +24,28 @@ $MetadataRoot = Join-Path $RepositoryRoot 'packaging\windows-x64'
 $DefaultManifestPath = Join-Path $MetadataRoot 'versions.json'
 if (-not $ManifestPath) { $ManifestPath = $DefaultManifestPath }
 $manifestCandidate = [IO.Path]::GetFullPath($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($ManifestPath))
-$defaultManifestCandidate = [IO.Path]::GetFullPath($DefaultManifestPath)
-$isFixtureInvocation = $OfflineSourceDirectory -and -not $manifestCandidate.Equals($defaultManifestCandidate, [StringComparison]::OrdinalIgnoreCase)
+$isFixtureInvocation = $false
+if ($FixtureContractMode -and $OfflineSourceDirectory -and [IO.File]::Exists($manifestCandidate)) {
+    try {
+        $temporaryRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
+        $offlineCandidate = [IO.Path]::GetFullPath($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OfflineSourceDirectory))
+        $manifestItem = Get-Item -LiteralPath $manifestCandidate -Force
+        $manifestIsSafeTemporaryFile = $manifestCandidate.StartsWith($temporaryRoot, [StringComparison]::OrdinalIgnoreCase) -and
+            $offlineCandidate.StartsWith($temporaryRoot, [StringComparison]::OrdinalIgnoreCase) -and
+            -not (($manifestItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) -and
+            $manifestItem.Length -gt 0 -and $manifestItem.Length -le 1MB
+        if ($manifestIsSafeTemporaryFile) {
+            $fixtureManifest = Get-Content -Raw -LiteralPath $manifestCandidate | ConvertFrom-Json
+            $isFixtureInvocation = $fixtureManifest.fixtureContract -ceq 'multicore-package-test-v1' -and
+                $fixtureManifest.components.xray.version -ceq 'fixture' -and
+                $fixtureManifest.components.mihomo.version -ceq 'fixture' -and
+                ([string]$fixtureManifest.components.xray.asset.url).StartsWith('https://example.invalid/', [StringComparison]::Ordinal) -and
+                ([string]$fixtureManifest.components.mihomo.asset.url).StartsWith('https://example.invalid/', [StringComparison]::Ordinal)
+        }
+    } catch {
+        $isFixtureInvocation = $false
+    }
+}
 if (-not $isFixtureInvocation) {
     if (-not $PrivilegedBrokerReleaseReady) { throw $ReleaseGateMessage }
     if ($AssertReleaseReady) {
