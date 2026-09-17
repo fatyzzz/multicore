@@ -31,7 +31,7 @@
 
 **Does NOT cover:** Preferences never contain live logs, transient errors, connection state, or a plaintext duplicate of a subscription URL.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 ```rust
 #[test]
@@ -68,12 +68,12 @@ fn corrupt_preferences_are_quarantined_without_touching_siblings() {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `cargo test -p multicore-desktop preferences::tests --locked`
 Expected: FAIL because `preferences` and `PreferenceStore` do not exist.
 
-- [ ] **Step 3: Implement the preference contract**
+- [x] **Step 3: Implement the preference contract**
 
 Define these exact public data shapes and store entry points:
 
@@ -111,12 +111,12 @@ impl PreferenceStore {
 
 `save` writes `preferences.json.tmp`, calls `sync_all`, atomically renames it, syncs the parent directory where supported, and applies the same owner-only Windows DACL pattern already used for snapshot data. `load` accepts schema 1, returns defaults for a missing file, and renames malformed content to `preferences.corrupt.json` without enumerating or modifying sibling paths. Add `mod preferences;` to `main.rs`.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `cargo test -p multicore-desktop preferences::tests --locked`
 Expected: PASS for round-trip, defaults, unknown schema rejection, atomic replacement, and corruption quarantine.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add apps/multicore-desktop/src/preferences.rs apps/multicore-desktop/src/main.rs apps/multicore-desktop/Cargo.toml Cargo.lock
@@ -134,7 +134,7 @@ git commit -m "feat(desktop): persist bounded desktop preferences"
 
 **Does NOT cover:** A tray-unavailable process is never hidden; smoke-test close still exits so release verification cannot strand a process.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 ```rust
 #[test]
@@ -154,12 +154,12 @@ fn minimize_and_close_hide_only_with_recoverable_tray() {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `cargo test -p multicore-desktop windows_shell::tests --locked`
 Expected: FAIL because the shell decision module does not exist.
 
-- [ ] **Step 3: Implement pure shell rules**
+- [x] **Step 3: Implement pure shell rules**
 
 ```rust
 pub const MIN_WIDTH: u32 = 700;
@@ -179,12 +179,12 @@ pub fn parse_resize_edge(value: &str) -> Option<ResizeEdge>;
 
 Clamp width/height to the selected monitor work area, keep at least 64 logical pixels of the title bar reachable, and center on the primary work area when the saved rectangle does not intersect any current monitor. Under Windows, map `ResizeEdge` to Winit `ResizeDirection`; keep that conversion behind `cfg(windows)`.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `cargo test -p multicore-desktop windows_shell::tests --locked`
 Expected: PASS including multi-monitor negative coordinates, oversized saved bounds, and all eight resize strings.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add apps/multicore-desktop/src/windows_shell.rs apps/multicore-desktop/src/main.rs
