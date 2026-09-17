@@ -14,6 +14,30 @@ function Assert-True {
     if (-not $Condition) { throw "FAIL: $Message" }
 }
 
+function ConvertTo-NativeQuotedArgument {
+    param([Parameter(Mandatory = $true)][string]$Value)
+
+    Assert-True (-not $Value.Contains('"')) 'native process argument must not contain a quote'
+    return '"' + $Value + '"'
+}
+
+function Assert-NoCredentialLeak {
+    param([Parameter(Mandatory = $true)][string[]]$Paths)
+
+    $maximumDiagnosticBytes = 1MB
+    foreach ($path in $Paths) {
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+        $diagnostic = Get-Item -LiteralPath $path
+        Assert-True ($diagnostic.Length -le $maximumDiagnosticBytes) `
+            "diagnostic output exceeds the bounded read limit: $($diagnostic.FullName)"
+        $contents = [IO.File]::ReadAllText($diagnostic.FullName)
+        Assert-True (-not $contents.Contains('private-token')) `
+            "diagnostic output contains the subscription credential marker: $($diagnostic.Name)"
+        Assert-True (-not $contents.Contains('https://sentinel.invalid/private-token')) `
+            "diagnostic output contains the credential-bearing subscription URL: $($diagnostic.Name)"
+    }
+}
+
 function Get-FileHashManifest {
     param([Parameter(Mandatory = $true)][string]$Root)
 
@@ -50,7 +74,7 @@ Assert-True (Test-Path -LiteralPath $installer -PathType Leaf) 'installer must e
 Assert-True (Test-Path -LiteralPath $package -PathType Container) 'portable package must exist'
 
 $temporaryBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
-$testRoot = Join-Path $temporaryBase ('multicore-installed-update-smoke-' + [Guid]::NewGuid().ToString('N'))
+$testRoot = Join-Path $temporaryBase ('multicore-installed-update-smoke ' + [Guid]::NewGuid().ToString('N'))
 $installRoot = Join-Path $testRoot 'installation'
 $foreignInstallRoot = Join-Path $testRoot 'foreign-installation'
 $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
@@ -60,7 +84,9 @@ $foreignAutostart = '"C:\Foreign Tool\agent.exe" --background'
 try {
     New-Item -ItemType Directory -Path $testRoot | Out-Null
     $install = Start-Process -FilePath $installer `
-        -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/TASKS=""', "/DIR=$installRoot") `
+        -ArgumentList @(
+            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/TASKS=""',
+            ('/DIR=' + (ConvertTo-NativeQuotedArgument $installRoot))) `
         -Wait -PassThru -WindowStyle Hidden
     Assert-True ($install.ExitCode -eq 0) "installer exited with $($install.ExitCode)"
 
@@ -133,11 +159,11 @@ try {
         $utf8NoBom)
     [IO.File]::WriteAllText(
         (Join-Path $profileGeneration 'subscription.json'),
-        "{`n  `"source_url`": `"https://sentinel.invalid/private-token`",`n  `"source_host`": `"sentinel.invalid`",`n  `"updated_at_unix`": 1757959200`n}`n",
+        "{`n  `"source_url`": `"https://sentinel.invalid/private-token`",`n  `"info`": {`"source_host`":`"sentinel.invalid`",`"updated_at_unix`":1757959200},`n  `"targets`": {}`n}`n",
         $utf8NoBom)
     [IO.File]::WriteAllText(
         (Join-Path $profileGeneration 'selections.json'),
-        "{`n  `"revision`": 1,`n  `"selections`": {`"proxy-group`": `"node-smoke`"}`n}`n",
+        "{`n  `"schema_version`": 1,`n  `"revision`": 1,`n  `"selections`": {`"proxy-group`": `"node-smoke`"}`n}`n",
         $utf8NoBom)
     [IO.File]::WriteAllText(
         (Join-Path $mutableRoot 'device-identity'),
@@ -158,8 +184,8 @@ try {
         $apply = Start-Process -FilePath $helper `
             -ArgumentList @(
                 '--wait-pid', '4294967295',
-                '--archive', $archive,
-                '--target', $current,
+                '--archive', (ConvertTo-NativeQuotedArgument $archive),
+                '--target', (ConvertTo-NativeQuotedArgument $current),
                 '--size', [string]$archiveSize,
                 '--sha256', $archiveHash,
                 '--version', '0.1.1') `
@@ -173,9 +199,80 @@ try {
 
     $mutableManifestAfter = Get-FileHashManifest -Root $mutableRoot
     Assert-FileHashManifestEqual -Expected $mutableManifestBefore -Actual $mutableManifestAfter
-    $updaterOutput = ([IO.File]::ReadAllText($updaterStdout) + [IO.File]::ReadAllText($updaterStderr))
-    Assert-True (-not $updaterOutput.Contains('private-token')) 'updater output must not contain the subscription credential marker'
-    Assert-True (-not $updaterOutput.Contains('https://sentinel.invalid/private-token')) 'updater output must not contain the credential-bearing subscription URL'
+
+    $stateReader = Join-Path $testRoot 'read persisted state.ps1'
+    $stateSignal = Join-Path $testRoot 'state-read.ok'
+    $stateReaderSource = @'
+[CmdletBinding()]
+param([Parameter(Mandatory = $true)][string]$SignalPath)
+
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+
+function Assert-State {
+    param([bool]$Condition, [string]$Message)
+    if (-not $Condition) { throw $Message }
+}
+
+$root = Join-Path ([Environment]::GetEnvironmentVariable('LOCALAPPDATA', 'Process')) 'MultiCore'
+$preferences = Get-Content -Raw -LiteralPath (Join-Path $root 'preferences.json') | ConvertFrom-Json
+Assert-State ($preferences.schema_version -eq 1) 'unexpected preferences schema'
+Assert-State ($preferences.launch_on_startup -eq $false) 'unexpected startup preference'
+Assert-State ($preferences.theme -ceq 'system') 'unexpected theme preference'
+
+$index = Get-Content -Raw -LiteralPath (Join-Path $root 'profiles\index.json') | ConvertFrom-Json
+Assert-State ($index.schema_version -eq 1) 'unexpected profiles schema'
+Assert-State ($index.active_profile_id -ceq 'profile-smoke') 'unexpected active profile'
+$activeProfile = @($index.profiles | Where-Object { $_.id -ceq $index.active_profile_id })
+Assert-State ($activeProfile.Count -eq 1) 'active profile entry must be unique'
+Assert-State ([long]$activeProfile[0].current_generation -eq 1) 'unexpected active generation'
+$generationName = 'snapshot-{0:D20}' -f [long]$activeProfile[0].current_generation
+$generation = Join-Path $root (Join-Path ('profiles\' + $index.active_profile_id) $generationName)
+
+$subscription = Get-Content -Raw -LiteralPath (Join-Path $generation 'subscription.json') | ConvertFrom-Json
+Assert-State ($subscription.source_url -ceq 'https://sentinel.invalid/private-token') 'subscription sentinel changed'
+Assert-State ($subscription.info.source_host -ceq 'sentinel.invalid') 'subscription host changed'
+Assert-State ([long]$subscription.info.updated_at_unix -eq 1757959200) 'subscription timestamp changed'
+$selections = Get-Content -Raw -LiteralPath (Join-Path $generation 'selections.json') | ConvertFrom-Json
+Assert-State ($selections.schema_version -eq 1) 'unexpected selections schema'
+Assert-State ([long]$selections.revision -eq 1) 'unexpected selections revision'
+Assert-State ($selections.selections.'proxy-group' -ceq 'node-smoke') 'selected node changed'
+Assert-State (([IO.File]::ReadAllText((Join-Path $root 'device-identity'))) -ceq "multicore-smoke-device-00000001`n") 'device identity changed'
+Assert-State (([IO.File]::ReadAllText((Join-Path $root 'logs\latest-core.log'))) -ceq "2025-09-15T12:00:00Z INFO smoke sentinel log line`n") 'core log changed'
+
+$signalTemporary = $SignalPath + '.tmp'
+[IO.File]::WriteAllText($signalTemporary, 'multicore-state-readable-v1', [Text.UTF8Encoding]::new($false))
+[IO.File]::Move($signalTemporary, $SignalPath)
+'@
+    [IO.File]::WriteAllText($stateReader, $stateReaderSource, $utf8NoBom)
+    $stateReaderStdout = Join-Path $testRoot 'state-reader-stdout.log'
+    $stateReaderStderr = Join-Path $testRoot 'state-reader-stderr.log'
+    $previousLocalAppData = [Environment]::GetEnvironmentVariable('LOCALAPPDATA', 'Process')
+    try {
+        [Environment]::SetEnvironmentVariable('LOCALAPPDATA', $testLocalAppData, 'Process')
+        $stateRead = Start-Process -FilePath 'powershell.exe' `
+            -ArgumentList @(
+                '-NoProfile', '-ExecutionPolicy', 'Bypass',
+                '-File', (ConvertTo-NativeQuotedArgument $stateReader),
+                '-SignalPath', (ConvertTo-NativeQuotedArgument $stateSignal)) `
+            -RedirectStandardOutput $stateReaderStdout `
+            -RedirectStandardError $stateReaderStderr `
+            -Wait -PassThru -WindowStyle Hidden
+    } finally {
+        [Environment]::SetEnvironmentVariable('LOCALAPPDATA', $previousLocalAppData, 'Process')
+    }
+    Assert-True ($stateRead.ExitCode -eq 0) "persisted state reader exited with $($stateRead.ExitCode)"
+    Assert-True (Test-Path -LiteralPath $stateSignal -PathType Leaf) 'persisted state reader must emit a success signal'
+    Assert-True ((Get-Item -LiteralPath $stateSignal).Length -le 64) 'persisted state reader signal must remain bounded'
+    Assert-True ([IO.File]::ReadAllText($stateSignal) -ceq 'multicore-state-readable-v1') 'persisted state reader signal must be exact'
+
+    Assert-NoCredentialLeak -Paths @(
+        $updaterStdout,
+        $updaterStderr,
+        (Join-Path $testRoot 'updater.log'),
+        (Join-Path $testRoot 'result.json'),
+        $stateReaderStdout,
+        $stateReaderStderr)
 
     Assert-True (Test-Path -LiteralPath (Join-Path $current 'MultiCore.exe') -PathType Leaf) 'updated payload must be published back to current'
     Assert-True ((Get-FileHash -LiteralPath $uninstaller -Algorithm SHA256).Hash -ceq $uninstallerHash) 'app update must preserve the uninstaller executable'
@@ -203,7 +300,9 @@ try {
     Assert-True ($null -eq $remainingAutostart) 'uninstall must remove app-owned autostart value even when enabled after install'
 
     $foreignInstall = Start-Process -FilePath $installer `
-        -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/TASKS=""', "/DIR=$foreignInstallRoot") `
+        -ArgumentList @(
+            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/TASKS=""',
+            ('/DIR=' + (ConvertTo-NativeQuotedArgument $foreignInstallRoot))) `
         -Wait -PassThru -WindowStyle Hidden
     Assert-True ($foreignInstall.ExitCode -eq 0) "second installer exited with $($foreignInstall.ExitCode)"
     New-ItemProperty -LiteralPath $runKey -Name 'MultiCore' -PropertyType String -Value $foreignAutostart -Force | Out-Null
@@ -221,7 +320,7 @@ try {
     $temporaryPrefix = $temporaryBase.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
     $resolvedRootName = [IO.Path]::GetFileName($resolvedRoot.TrimEnd('\', '/'))
     if ($resolvedRoot.StartsWith($temporaryPrefix, [StringComparison]::OrdinalIgnoreCase) -and
-        $resolvedRootName -match '^multicore-installed-update-smoke-[0-9a-f]{32}$' -and
+        $resolvedRootName -match '^multicore-installed-update-smoke [0-9a-f]{32}$' -and
         (Test-Path -LiteralPath $resolvedRoot)) {
         $leftoverUninstaller = Join-Path $installRoot 'unins000.exe'
         if (Test-Path -LiteralPath $leftoverUninstaller -PathType Leaf) {
