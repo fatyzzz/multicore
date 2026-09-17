@@ -42,21 +42,15 @@ impl HttpClient for FixtureHttp {
     ) -> Pin<Box<dyn Future<Output = Result<HttpResponse, FetchError>> + Send + 'a>> {
         Box::pin(async move {
             Ok(match user_agent {
-                UA_NATIVE => HttpResponse {
-                    status: 404,
-                    body: Vec::new(),
-                    subscription_userinfo: None,
-                },
-                UA_MIHOMO => HttpResponse {
-                    status: 200,
-                    body: self.mihomo.as_bytes().to_vec(),
-                    subscription_userinfo: None,
-                },
-                UA_XRAY => HttpResponse {
-                    status: 200,
-                    body: br#"{}"#.to_vec(),
-                    subscription_userinfo: None,
-                },
+                UA_NATIVE => HttpResponse::new(404, Vec::new(), std::iter::empty::<(&str, &str)>()),
+                UA_MIHOMO => HttpResponse::new(
+                    200,
+                    self.mihomo.as_bytes().to_vec(),
+                    std::iter::empty::<(&str, &str)>(),
+                ),
+                UA_XRAY => {
+                    HttpResponse::new(200, br#"{}"#.to_vec(), std::iter::empty::<(&str, &str)>())
+                }
                 _ => return Err(FetchError::Network),
             })
         })

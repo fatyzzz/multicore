@@ -47,22 +47,22 @@ impl HttpClient for FakeHttp {
 }
 
 fn ok(body: impl Into<Vec<u8>>) -> Result<HttpResponse, FetchError> {
-    Ok(HttpResponse {
-        status: 200,
-        body: body.into(),
-        subscription_userinfo: None,
-    })
+    Ok(HttpResponse::new(
+        200,
+        body.into(),
+        std::iter::empty::<(&str, &str)>(),
+    ))
 }
 
 fn ok_with_userinfo(
     body: impl Into<Vec<u8>>,
     subscription_userinfo: &str,
 ) -> Result<HttpResponse, FetchError> {
-    Ok(HttpResponse {
-        status: 200,
-        body: body.into(),
-        subscription_userinfo: Some(subscription_userinfo.to_owned()),
-    })
+    Ok(HttpResponse::new(
+        200,
+        body.into(),
+        [("subscription-userinfo", subscription_userinfo)],
+    ))
 }
 
 #[tokio::test]

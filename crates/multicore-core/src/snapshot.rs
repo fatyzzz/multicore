@@ -14,7 +14,10 @@ use serde::{Deserialize, Serialize};
 use serde_yaml_ng::Value as YamlValue;
 use thiserror::Error;
 
-use crate::{ConfigError, MihomoConfig, XrayConfig, parse_mihomo, parse_xray};
+use crate::{
+    ConfigError, MihomoConfig, XrayConfig, fetch::SubscriptionMetadataHeaders, parse_mihomo,
+    parse_xray,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Snapshot {
@@ -26,16 +29,74 @@ pub struct Snapshot {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SubscriptionInfo {
     pub source_host: String,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub uploaded_bytes: Option<u64>,
+    #[serde(default)]
     pub downloaded_bytes: Option<u64>,
+    #[serde(default)]
     pub total_bytes: Option<u64>,
+    #[serde(default)]
     pub expires_at_unix: Option<u64>,
     pub updated_at_unix: u64,
+    #[serde(default)]
+    pub refresh_interval_secs: Option<u64>,
+    #[serde(default)]
+    pub announcement_text: Option<String>,
+    #[serde(default)]
+    pub announcement_action_label: Option<String>,
+    #[serde(default)]
+    pub announcement_tone: Option<AnnouncementTone>,
+}
+
+impl SubscriptionInfo {
+    pub fn used_bytes(&self) -> Option<u64> {
+        match (self.uploaded_bytes, self.downloaded_bytes) {
+            (Some(uploaded), Some(downloaded)) => Some(uploaded.saturating_add(downloaded)),
+            (Some(uploaded), None) => Some(uploaded),
+            (None, Some(downloaded)) => Some(downloaded),
+            (None, None) => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AnnouncementTone {
+    Info,
+    Success,
+    Danger,
+}
+
+impl AnnouncementTone {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Info => "info",
+            Self::Success => "success",
+            Self::Danger => "danger",
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct SubscriptionRecord {
     source_url: String,
     info: SubscriptionInfo,
+    #[serde(default)]
+    targets: SubscriptionTargets,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct SubscriptionTargets {
+    #[serde(default)]
+    home_url: Option<String>,
+    #[serde(default)]
+    support_url: Option<String>,
+    #[serde(default)]
+    announcement_url: Option<String>,
+    #[serde(default)]
+    logo_url: Option<String>,
 }
 
 impl std::fmt::Debug for SubscriptionRecord {
@@ -66,6 +127,48 @@ impl Snapshot {
         userinfo_header: Option<&str>,
         updated_at_unix: u64,
     ) -> Result<Self, ConfigError> {
+        let metadata = SubscriptionMetadataHeaders::from_legacy_userinfo(userinfo_header);
+        self.attach_subscription(
+            source_url,
+            ParsedSubscriptionMetadata::parse(&metadata),
+            updated_at_unix,
+        )?;
+        Ok(self)
+    }
+
+    pub(crate) fn with_subscription_metadata(
+        mut self,
+        source_url: &str,
+        headers: &SubscriptionMetadataHeaders,
+        updated_at_unix: u64,
+    ) -> Result<Self, ConfigError> {
+        self.attach_subscription(
+            source_url,
+            ParsedSubscriptionMetadata::parse(headers),
+            updated_at_unix,
+        )?;
+        Ok(self)
+    }
+
+    pub(crate) fn with_merged_subscription_metadata(
+        mut self,
+        source_url: &str,
+        mihomo: &SubscriptionMetadataHeaders,
+        xray: &SubscriptionMetadataHeaders,
+        updated_at_unix: u64,
+    ) -> Result<Self, ConfigError> {
+        let metadata = ParsedSubscriptionMetadata::parse(mihomo)
+            .merge(ParsedSubscriptionMetadata::parse(xray));
+        self.attach_subscription(source_url, metadata, updated_at_unix)?;
+        Ok(self)
+    }
+
+    fn attach_subscription(
+        &mut self,
+        source_url: &str,
+        metadata: ParsedSubscriptionMetadata,
+        updated_at_unix: u64,
+    ) -> Result<(), ConfigError> {
         let source_url = source_url.trim();
         let parsed = reqwest::Url::parse(source_url).map_err(|_| ConfigError::InvalidMihomo)?;
         if source_url.len() > 8192
@@ -78,19 +181,24 @@ impl Snapshot {
             .host_str()
             .expect("validated subscription URL has a host")
             .to_owned();
-        let (downloaded_bytes, total_bytes, expires_at_unix) =
-            parse_subscription_userinfo(userinfo_header);
         self.subscription = Some(SubscriptionRecord {
             source_url: source_url.to_owned(),
             info: SubscriptionInfo {
+                display_name: metadata.title.unwrap_or_else(|| source_host.clone()),
                 source_host,
-                downloaded_bytes,
-                total_bytes,
-                expires_at_unix,
+                uploaded_bytes: metadata.uploaded_bytes,
+                downloaded_bytes: metadata.downloaded_bytes,
+                total_bytes: metadata.total_bytes.into_option(),
+                expires_at_unix: metadata.expires_at_unix.into_option(),
                 updated_at_unix,
+                refresh_interval_secs: metadata.refresh_interval_secs,
+                announcement_text: metadata.announcement_text.into_option(),
+                announcement_action_label: metadata.announcement_action_label,
+                announcement_tone: metadata.announcement_tone,
             },
+            targets: metadata.targets,
         });
-        Ok(self)
+        Ok(())
     }
 
     pub fn subscription_source_url(&self) -> Option<&str> {
@@ -104,15 +212,136 @@ impl Snapshot {
             .as_ref()
             .map(|subscription| &subscription.info)
     }
+
+    pub fn subscription_home_url(&self) -> Option<&str> {
+        self.subscription.as_ref()?.targets.home_url.as_deref()
+    }
+
+    pub fn subscription_support_url(&self) -> Option<&str> {
+        self.subscription.as_ref()?.targets.support_url.as_deref()
+    }
+
+    pub fn subscription_announcement_url(&self) -> Option<&str> {
+        self.subscription
+            .as_ref()?
+            .targets
+            .announcement_url
+            .as_deref()
+    }
+
+    pub fn subscription_logo_url(&self) -> Option<&str> {
+        self.subscription.as_ref()?.targets.logo_url.as_deref()
+    }
 }
 
-fn parse_subscription_userinfo(header: Option<&str>) -> (Option<u64>, Option<u64>, Option<u64>) {
-    let Some(header) = header.filter(|header| header.len() <= 1024 && header.is_ascii()) else {
-        return (None, None, None);
-    };
-    let mut downloaded = None;
-    let mut total = None;
-    let mut expires = None;
+#[derive(Default)]
+struct ParsedSubscriptionMetadata {
+    title: Option<String>,
+    uploaded_bytes: Option<u64>,
+    downloaded_bytes: Option<u64>,
+    total_bytes: MetadataValue<u64>,
+    expires_at_unix: MetadataValue<u64>,
+    refresh_interval_secs: Option<u64>,
+    announcement_text: MetadataValue<String>,
+    announcement_action_label: Option<String>,
+    announcement_tone: Option<AnnouncementTone>,
+    targets: SubscriptionTargets,
+}
+
+#[derive(Default)]
+enum MetadataValue<T> {
+    #[default]
+    Missing,
+    Suppressed,
+    Value(T),
+}
+
+impl<T> MetadataValue<T> {
+    fn or(self, fallback: Self) -> Self {
+        match self {
+            Self::Missing => fallback,
+            present => present,
+        }
+    }
+
+    fn into_option(self) -> Option<T> {
+        match self {
+            Self::Value(value) => Some(value),
+            Self::Missing | Self::Suppressed => None,
+        }
+    }
+
+    fn is_missing(&self) -> bool {
+        matches!(self, Self::Missing)
+    }
+}
+
+impl ParsedSubscriptionMetadata {
+    fn parse(headers: &SubscriptionMetadataHeaders) -> Self {
+        let mut metadata = Self {
+            title: first_decoded_text(headers, "profile-title", 128, true)
+                .or_else(|| first_decoded_text(headers, "flclashx-servicename", 128, true))
+                .or_else(|| content_disposition_title(headers)),
+            ..Self::default()
+        };
+        for header in headers.suffix_values("subscription-userinfo") {
+            parse_subscription_userinfo(header, &mut metadata);
+        }
+        metadata.refresh_interval_secs = headers
+            .values("profile-update-interval")
+            .find_map(parse_refresh_interval);
+        metadata.announcement_text = first_announcement(headers);
+        metadata.announcement_action_label =
+            first_plain_text(headers, &["sub-info-button-text", "banner-button-text"], 32);
+        metadata.announcement_tone = headers
+            .values("sub-info-color")
+            .find_map(|value| match value.trim().to_ascii_lowercase().as_str() {
+                "blue" => Some(AnnouncementTone::Info),
+                "green" => Some(AnnouncementTone::Success),
+                "red" => Some(AnnouncementTone::Danger),
+                _ => None,
+            });
+        metadata.targets.home_url = first_url(headers, &["profile-web-page-url"], false, false);
+        metadata.targets.support_url = first_url(headers, &["support-url"], true, false);
+        metadata.targets.announcement_url = first_url(
+            headers,
+            &["announce-url", "sub-info-button-link", "banner-button-url"],
+            true,
+            false,
+        );
+        metadata.targets.logo_url = first_url(headers, &["flclashx-servicelogo"], false, true);
+        metadata
+    }
+
+    fn merge(self, fallback: Self) -> Self {
+        Self {
+            title: self.title.or(fallback.title),
+            uploaded_bytes: self.uploaded_bytes.or(fallback.uploaded_bytes),
+            downloaded_bytes: self.downloaded_bytes.or(fallback.downloaded_bytes),
+            total_bytes: self.total_bytes.or(fallback.total_bytes),
+            expires_at_unix: self.expires_at_unix.or(fallback.expires_at_unix),
+            refresh_interval_secs: self
+                .refresh_interval_secs
+                .or(fallback.refresh_interval_secs),
+            announcement_text: self.announcement_text.or(fallback.announcement_text),
+            announcement_action_label: self
+                .announcement_action_label
+                .or(fallback.announcement_action_label),
+            announcement_tone: self.announcement_tone.or(fallback.announcement_tone),
+            targets: SubscriptionTargets {
+                home_url: self.targets.home_url.or(fallback.targets.home_url),
+                support_url: self.targets.support_url.or(fallback.targets.support_url),
+                announcement_url: self
+                    .targets
+                    .announcement_url
+                    .or(fallback.targets.announcement_url),
+                logo_url: self.targets.logo_url.or(fallback.targets.logo_url),
+            },
+        }
+    }
+}
+
+fn parse_subscription_userinfo(header: &str, metadata: &mut ParsedSubscriptionMetadata) {
     for field in header.split(';') {
         let Some((name, value)) = field.split_once('=') else {
             continue;
@@ -121,13 +350,203 @@ fn parse_subscription_userinfo(header: Option<&str>) -> (Option<u64>, Option<u64
             continue;
         };
         match name.trim().to_ascii_lowercase().as_str() {
-            "download" => downloaded = Some(value),
-            "total" if value > 0 => total = Some(value),
-            "expire" if value > 0 => expires = Some(value),
+            "upload" if metadata.uploaded_bytes.is_none() => metadata.uploaded_bytes = Some(value),
+            "download" if metadata.downloaded_bytes.is_none() => {
+                metadata.downloaded_bytes = Some(value)
+            }
+            "total" if metadata.total_bytes.is_missing() => {
+                metadata.total_bytes = if value == 0 {
+                    MetadataValue::Suppressed
+                } else {
+                    MetadataValue::Value(value)
+                }
+            }
+            "expire" if metadata.expires_at_unix.is_missing() => {
+                metadata.expires_at_unix = if value == 0 {
+                    MetadataValue::Suppressed
+                } else {
+                    MetadataValue::Value(value)
+                }
+            }
             _ => {}
         }
     }
-    (downloaded, total, expires)
+}
+
+fn first_decoded_text(
+    headers: &SubscriptionMetadataHeaders,
+    name: &str,
+    limit: usize,
+    reject_credential_like: bool,
+) -> Option<String> {
+    headers.values(name).find_map(|value| {
+        let decoded = decode_text(value)?;
+        if reject_credential_like {
+            sanitize_title_candidate(&decoded, limit)
+        } else {
+            sanitize_text(&decoded, limit)
+        }
+    })
+}
+
+fn sanitize_title_candidate(value: &str, limit: usize) -> Option<String> {
+    if is_control_heavy(value) {
+        return None;
+    }
+    let sanitized = sanitize_text(value, limit)?;
+    (!looks_credential_like(&sanitized)).then_some(sanitized)
+}
+
+fn is_control_heavy(value: &str) -> bool {
+    let mut total = 0_usize;
+    let mut unsafe_scalars = 0_usize;
+    for character in value.chars() {
+        total += 1;
+        if character.is_control() || is_bidi_control(character) {
+            unsafe_scalars += 1;
+        }
+    }
+    unsafe_scalars > 8 && unsafe_scalars.saturating_mul(4) > total
+}
+
+fn first_plain_text(
+    headers: &SubscriptionMetadataHeaders,
+    names: &[&str],
+    limit: usize,
+) -> Option<String> {
+    names.iter().find_map(|name| {
+        headers
+            .values(name)
+            .find_map(|value| sanitize_text(value, limit))
+    })
+}
+
+fn first_announcement(headers: &SubscriptionMetadataHeaders) -> MetadataValue<String> {
+    for name in ["announce", "sub-info-text", "banner-text"] {
+        for value in headers.values(name) {
+            let Some(decoded) = decode_text(value) else {
+                continue;
+            };
+            if decoded.trim() == "0" {
+                return MetadataValue::Suppressed;
+            }
+            if let Some(sanitized) = sanitize_text(&decoded, 512) {
+                return MetadataValue::Value(sanitized);
+            }
+        }
+    }
+    MetadataValue::Missing
+}
+
+fn looks_credential_like(value: &str) -> bool {
+    value.contains("://")
+        || value
+            .split_once('@')
+            .is_some_and(|(authority, host)| authority.contains(':') && !host.is_empty())
+}
+
+fn decode_text(value: &str) -> Option<String> {
+    let Some(encoded) = value.strip_prefix("base64:") else {
+        return Some(value.to_owned());
+    };
+    use base64::Engine as _;
+    let bytes = [
+        &base64::engine::general_purpose::STANDARD,
+        &base64::engine::general_purpose::STANDARD_NO_PAD,
+        &base64::engine::general_purpose::URL_SAFE,
+        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+    ]
+    .into_iter()
+    .find_map(|engine| engine.decode(encoded.trim()).ok())?;
+    String::from_utf8(bytes).ok()
+}
+
+fn sanitize_text(value: &str, limit: usize) -> Option<String> {
+    let mut output = String::new();
+    let mut pending_space = false;
+    for character in value.chars() {
+        if is_bidi_control(character) {
+            continue;
+        }
+        if character.is_whitespace() || character.is_control() {
+            pending_space = !output.is_empty();
+            continue;
+        }
+        if pending_space && output.chars().count() < limit {
+            output.push(' ');
+        }
+        pending_space = false;
+        if output.chars().count() >= limit {
+            break;
+        }
+        output.push(character);
+    }
+    (!output.is_empty()).then_some(output)
+}
+
+fn is_bidi_control(character: char) -> bool {
+    matches!(
+        character,
+        '\u{061c}'
+            | '\u{200e}'
+            | '\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2066}'..='\u{2069}'
+    )
+}
+
+fn content_disposition_title(headers: &SubscriptionMetadataHeaders) -> Option<String> {
+    headers.values("content-disposition").find_map(|value| {
+        value.split(';').skip(1).find_map(|parameter| {
+            let (name, value) = parameter.trim().split_once('=')?;
+            if !name.eq_ignore_ascii_case("filename") {
+                return None;
+            }
+            sanitize_title_candidate(value.trim().trim_matches('"'), 128)
+        })
+    })
+}
+
+fn parse_refresh_interval(value: &str) -> Option<u64> {
+    let hours = value.trim().parse::<u128>().ok()?;
+    let seconds = hours
+        .saturating_mul(60 * 60)
+        .clamp(15 * 60, 30 * 24 * 60 * 60);
+    Some(seconds as u64)
+}
+
+fn first_url(
+    headers: &SubscriptionMetadataHeaders,
+    names: &[&str],
+    allow_tg: bool,
+    https_only: bool,
+) -> Option<String> {
+    names.iter().find_map(|name| {
+        headers
+            .values(name)
+            .find_map(|value| validate_url(value, allow_tg, https_only))
+    })
+}
+
+fn validate_url(value: &str, allow_tg: bool, https_only: bool) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() || value.len() > 2048 || value.chars().any(char::is_control) {
+        return None;
+    }
+    let parsed = reqwest::Url::parse(value).ok()?;
+    let scheme_allowed = if https_only {
+        parsed.scheme() == "https"
+    } else {
+        matches!(parsed.scheme(), "http" | "https") || (allow_tg && parsed.scheme() == "tg")
+    };
+    if !scheme_allowed
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+    {
+        return None;
+    }
+    Some(parsed.to_string())
 }
 
 #[derive(Debug, Default)]
@@ -793,12 +1212,18 @@ fn load_generation(directory: &Path) -> Option<Snapshot> {
     if subscription_path.is_file()
         && subscription_path.metadata().ok()?.len() <= 16 * 1024
         && let Ok(bytes) = fs::read(subscription_path)
-        && let Ok(record) = serde_json::from_slice::<SubscriptionRecord>(&bytes)
+        && let Ok(mut record) = serde_json::from_slice::<SubscriptionRecord>(&bytes)
         && let Ok(parsed) = reqwest::Url::parse(&record.source_url)
         && record.source_url.len() <= 8192
         && matches!(parsed.scheme(), "http" | "https")
         && parsed.host_str() == Some(record.info.source_host.as_str())
     {
+        if record.info.display_name.is_empty() {
+            record
+                .info
+                .display_name
+                .clone_from(&record.info.source_host);
+        }
         snapshot.subscription = Some(record);
     }
     Some(snapshot)

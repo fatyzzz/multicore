@@ -5,7 +5,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use reqwest::header::{ACCEPT, USER_AGENT};
+use reqwest::header::{ACCEPT, HeaderMap, USER_AGENT};
 use serde_json::value::RawValue;
 use thiserror::Error;
 
@@ -15,11 +15,120 @@ pub const UA_NATIVE: &str = "multicore-json-massive";
 pub const UA_MIHOMO: &str = "multicore-mihomo";
 pub const UA_XRAY: &str = "multicore-xray";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct HttpResponse {
     pub status: u16,
     pub body: Vec<u8>,
-    pub subscription_userinfo: Option<String>,
+    metadata: SubscriptionMetadataHeaders,
+}
+
+impl std::fmt::Debug for HttpResponse {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("HttpResponse")
+            .field("status", &self.status)
+            .field("body_len", &self.body.len())
+            .field("metadata_count", &self.metadata.fields.len())
+            .finish()
+    }
+}
+
+const MAX_METADATA_HEADER_BYTES: usize = 16 * 1024;
+const MAX_METADATA_FIELD_BYTES: usize = 4 * 1024;
+
+#[derive(Clone, Default, PartialEq, Eq)]
+pub(crate) struct SubscriptionMetadataHeaders {
+    fields: Vec<(String, String)>,
+}
+
+impl SubscriptionMetadataHeaders {
+    pub(crate) fn from_legacy_userinfo(value: Option<&str>) -> Self {
+        Self::from_pairs(
+            value
+                .into_iter()
+                .map(|value| ("subscription-userinfo", value)),
+        )
+    }
+
+    fn from_pairs<N, V>(headers: impl IntoIterator<Item = (N, V)>) -> Self
+    where
+        N: AsRef<str>,
+        V: AsRef<str>,
+    {
+        let mut fields = Vec::new();
+        let mut aggregate = 0_usize;
+        for (name, value) in headers {
+            let name = name.as_ref().to_ascii_lowercase();
+            let value = value.as_ref();
+            if !is_metadata_header(&name)
+                || name.len() > 128
+                || value.len() > MAX_METADATA_FIELD_BYTES
+                || value.contains(['\r', '\n'])
+            {
+                continue;
+            }
+            let size = name.len().saturating_add(value.len());
+            if aggregate.saturating_add(size) > MAX_METADATA_HEADER_BYTES {
+                break;
+            }
+            aggregate += size;
+            fields.push((name, value.to_owned()));
+        }
+        Self { fields }
+    }
+
+    fn from_header_map(headers: &HeaderMap) -> Self {
+        Self::from_pairs(headers.iter().filter_map(|(name, value)| {
+            std::str::from_utf8(value.as_bytes())
+                .ok()
+                .map(|value| (name.as_str(), value))
+        }))
+    }
+
+    pub(crate) fn values<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a str> + 'a {
+        self.fields
+            .iter()
+            .filter(move |(candidate, _)| candidate == name)
+            .map(|(_, value)| value.as_str())
+    }
+
+    pub(crate) fn suffix_values<'a>(
+        &'a self,
+        suffix: &'a str,
+    ) -> impl Iterator<Item = &'a str> + 'a {
+        self.fields
+            .iter()
+            .filter(move |(candidate, _)| {
+                candidate == suffix
+                    || candidate
+                        .strip_suffix(suffix)
+                        .is_some_and(|prefix| prefix.ends_with('-'))
+            })
+            .map(|(_, value)| value.as_str())
+    }
+}
+
+fn is_metadata_header(name: &str) -> bool {
+    matches!(
+        name,
+        "profile-title"
+            | "flclashx-servicename"
+            | "content-disposition"
+            | "flclashx-servicelogo"
+            | "profile-update-interval"
+            | "profile-web-page-url"
+            | "support-url"
+            | "announce"
+            | "sub-info-text"
+            | "banner-text"
+            | "announce-url"
+            | "sub-info-button-link"
+            | "banner-button-url"
+            | "sub-info-button-text"
+            | "banner-button-text"
+            | "sub-info-color"
+    ) || name == "subscription-userinfo"
+        || name.ends_with("-subscription-userinfo")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -85,12 +194,7 @@ impl HttpClient for ReqwestHttpClient {
                 .await
                 .map_err(|_| FetchError::Network)?;
             let status = response.status().as_u16();
-            let subscription_userinfo = response
-                .headers()
-                .get("subscription-userinfo")
-                .and_then(|value| value.to_str().ok())
-                .filter(|value| value.len() <= 1024 && value.is_ascii())
-                .map(ToOwned::to_owned);
+            let metadata = SubscriptionMetadataHeaders::from_header_map(response.headers());
             let limit = response_limit(user_agent);
             if response
                 .content_length()
@@ -110,7 +214,7 @@ impl HttpClient for ReqwestHttpClient {
             Ok(HttpResponse {
                 status,
                 body,
-                subscription_userinfo,
+                metadata,
             })
         })
     }
@@ -134,11 +238,7 @@ impl<C: HttpClient> SubscriptionFetcher<C> {
             && response.status_is_success()
         {
             let snapshot = parse_native(&response.body)?
-                .with_subscription_source(
-                    url,
-                    response.subscription_userinfo.as_deref(),
-                    current_unix_time(),
-                )
+                .with_subscription_metadata(url, &response.metadata, current_unix_time())
                 .map_err(|_| FetchError::InvalidBundle)?;
             return store.save(snapshot).map_err(|_| FetchError::Persistence);
         }
@@ -149,19 +249,32 @@ impl<C: HttpClient> SubscriptionFetcher<C> {
         );
         let mihomo = success_response(mihomo?)?;
         let xray = success_response(xray?)?;
-        let userinfo = mihomo
-            .subscription_userinfo
-            .as_deref()
-            .or(xray.subscription_userinfo.as_deref());
         let snapshot = Snapshot::parse(&mihomo.body, &xray.body)
             .map_err(|_| FetchError::InvalidConfig)?
-            .with_subscription_source(url, userinfo, current_unix_time())
+            .with_merged_subscription_metadata(
+                url,
+                &mihomo.metadata,
+                &xray.metadata,
+                current_unix_time(),
+            )
             .map_err(|_| FetchError::InvalidConfig)?;
         store.save(snapshot).map_err(|_| FetchError::Persistence)
     }
 }
 
 impl HttpResponse {
+    pub fn new<N, V>(status: u16, body: Vec<u8>, headers: impl IntoIterator<Item = (N, V)>) -> Self
+    where
+        N: AsRef<str>,
+        V: AsRef<str>,
+    {
+        Self {
+            status,
+            body,
+            metadata: SubscriptionMetadataHeaders::from_pairs(headers),
+        }
+    }
+
     fn status_is_success(&self) -> bool {
         (200..300).contains(&self.status)
     }

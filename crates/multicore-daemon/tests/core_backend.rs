@@ -59,25 +59,25 @@ impl HttpClient for FixtureHttp {
         let mihomo = self.mihomo;
         Box::pin(async move {
             let response = match user_agent {
-                UA_NATIVE => HttpResponse {
-                    status: 200,
-                    body: format!("[{},{{}}]", serde_json::to_string(mihomo).unwrap()).into_bytes(),
-                    subscription_userinfo: Some(
-                        "upload=0; download=938375741110; total=0; expire=1792851157".into(),
-                    ),
-                },
-                UA_MIHOMO => HttpResponse {
-                    status: 200,
-                    body: mihomo.as_bytes().to_vec(),
-                    subscription_userinfo: Some(
-                        "upload=0; download=938375741110; total=0; expire=1792851157".into(),
-                    ),
-                },
-                UA_XRAY => HttpResponse {
-                    status: 200,
-                    body: br#"{}"#.to_vec(),
-                    subscription_userinfo: None,
-                },
+                UA_NATIVE => HttpResponse::new(
+                    200,
+                    format!("[{},{{}}]", serde_json::to_string(mihomo).unwrap()).into_bytes(),
+                    [(
+                        "subscription-userinfo",
+                        "upload=0; download=938375741110; total=0; expire=1792851157",
+                    )],
+                ),
+                UA_MIHOMO => HttpResponse::new(
+                    200,
+                    mihomo.as_bytes().to_vec(),
+                    [(
+                        "subscription-userinfo",
+                        "upload=0; download=938375741110; total=0; expire=1792851157",
+                    )],
+                ),
+                UA_XRAY => {
+                    HttpResponse::new(200, br#"{}"#.to_vec(), std::iter::empty::<(&str, &str)>())
+                }
                 _ => return Err(FetchError::Network),
             };
             Ok(response)
