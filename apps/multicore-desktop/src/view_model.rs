@@ -2349,6 +2349,7 @@ mod tests {
     #[test]
     fn one_page_home_shell_avoids_routes_blank_and_layout_regressions() {
         let app = include_str!("../ui/app.slint");
+        let normalized_app = app.replace("\r\n", "\n");
         let components = include_str!("../ui/components.slint");
         let main = include_str!("main.rs");
 
@@ -2365,7 +2366,8 @@ mod tests {
         assert!(!app.contains("profile-name"));
         assert!(!main.contains("set_profile_name"));
         assert!(
-            app.contains("height: 60px;\n                                horizontal-stretch: 1;")
+            normalized_app
+                .contains("height: 60px;\n                                horizontal-stretch: 1;")
         );
         assert!(app.contains("if root.has-service-logo: Rectangle"));
         assert!(app.contains("source: @image-url(\"../assets/power.svg\")"));
