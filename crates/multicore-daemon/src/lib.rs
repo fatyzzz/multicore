@@ -108,6 +108,8 @@ pub struct SubscriptionInfoDto {
     pub support_available: bool,
     #[serde(default)]
     pub announcement_action_available: bool,
+    #[serde(default)]
+    pub service_logo_path: Option<String>,
     pub refresh_available: bool,
 }
 
@@ -1203,6 +1205,10 @@ impl<P: ProcessController> CoreRuntime<P> {
                         announcement_action_available: snapshot
                             .subscription_announcement_url()
                             .is_some(),
+                        service_logo_path: snapshot
+                            .service_logo_path()
+                            .and_then(std::path::Path::to_str)
+                            .map(ToOwned::to_owned),
                         refresh_available: snapshot.subscription_source_url().is_some(),
                     })
             }),

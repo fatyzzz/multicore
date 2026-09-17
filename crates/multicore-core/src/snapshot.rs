@@ -15,8 +15,10 @@ use serde_yaml_ng::Value as YamlValue;
 use thiserror::Error;
 
 use crate::{
-    ConfigError, MihomoConfig, XrayConfig, fetch::SubscriptionMetadataHeaders, parse_mihomo,
-    parse_xray,
+    ConfigError, MihomoConfig, XrayConfig,
+    fetch::SubscriptionMetadataHeaders,
+    parse_mihomo, parse_xray,
+    service_logo::{MAX_SERVICE_LOGO_OUTPUT_BYTES, is_canonical_service_logo},
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -24,6 +26,8 @@ pub struct Snapshot {
     pub mihomo: MihomoConfig,
     pub xray: XrayConfig,
     subscription: Option<SubscriptionRecord>,
+    service_logo_png: Option<Vec<u8>>,
+    service_logo_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,6 +122,8 @@ impl Snapshot {
             mihomo,
             xray,
             subscription: None,
+            service_logo_png: None,
+            service_logo_path: None,
         })
     }
 
@@ -229,8 +235,17 @@ impl Snapshot {
             .as_deref()
     }
 
-    pub fn subscription_logo_url(&self) -> Option<&str> {
-        self.subscription.as_ref()?.targets.logo_url.as_deref()
+    pub(crate) fn take_subscription_logo_url(&mut self) -> Option<String> {
+        self.subscription.as_mut()?.targets.logo_url.take()
+    }
+
+    pub(crate) fn set_service_logo_png(&mut self, png: Vec<u8>) {
+        self.service_logo_png = Some(png);
+        self.service_logo_path = None;
+    }
+
+    pub fn service_logo_path(&self) -> Option<&Path> {
+        self.service_logo_path.as_deref()
     }
 }
 
@@ -736,16 +751,22 @@ impl PersistentSnapshotStore {
         let mut generations = generation_directories(&root)?;
         for (_, directory) in &generations {
             secure_directory(directory)?;
-            for config in ["mihomo.yaml", "xray.json", "subscription.json"] {
+            for config in [
+                "mihomo.yaml",
+                "xray.json",
+                "subscription.json",
+                "service-logo.png",
+            ] {
                 let path = directory.join(config);
                 match fs::symlink_metadata(&path) {
                     Ok(metadata) if metadata.file_type().is_file() => secure_file(&path)?,
-                    Ok(_) => {
+                    Ok(_) if config != "service-logo.png" => {
                         return Err(PersistenceError::Io(io::Error::new(
                             io::ErrorKind::InvalidData,
                             "snapshot config is not a regular file",
                         )));
                     }
+                    Ok(_) => {}
                     Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                     Err(error) => return Err(PersistenceError::Io(error)),
                 }
@@ -796,7 +817,7 @@ impl PersistentSnapshotStore {
 
     pub fn commit_with_generation(
         &self,
-        snapshot: Snapshot,
+        mut snapshot: Snapshot,
     ) -> Result<(u64, Arc<Snapshot>), PersistenceError> {
         let _guard = self
             .commit_lock
@@ -818,8 +839,13 @@ impl PersistentSnapshotStore {
             )?;
             write_synced(&staging.join("xray.json"), snapshot.xray.raw_bytes())?;
             if let Some(subscription) = &snapshot.subscription {
-                let encoded = serde_json::to_vec(subscription).map_err(io::Error::other)?;
+                let mut persisted = subscription.clone();
+                persisted.targets.logo_url = None;
+                let encoded = serde_json::to_vec(&persisted).map_err(io::Error::other)?;
                 write_synced(&staging.join("subscription.json"), &encoded)?;
+            }
+            if let Some(logo) = &snapshot.service_logo_png {
+                write_synced(&staging.join("service-logo.png"), logo)?;
             }
             sync_directory(&staging)?;
             fs::rename(&staging, &published)?;
@@ -831,6 +857,10 @@ impl PersistentSnapshotStore {
             let _ = fs::remove_dir_all(&staging);
             return Err(PersistenceError::Io(error));
         }
+        snapshot.service_logo_path = snapshot
+            .service_logo_png
+            .as_ref()
+            .map(|_| published.join("service-logo.png"));
         let snapshot = Arc::new(snapshot);
         *self
             .current
@@ -1225,6 +1255,15 @@ fn load_generation(directory: &Path) -> Option<Snapshot> {
                 .clone_from(&record.info.source_host);
         }
         snapshot.subscription = Some(record);
+    }
+    let logo_path = directory.join("service-logo.png");
+    if logo_path.symlink_metadata().ok().is_some_and(|metadata| {
+        metadata.file_type().is_file() && metadata.len() <= MAX_SERVICE_LOGO_OUTPUT_BYTES as u64
+    }) && let Ok(bytes) = fs::read(&logo_path)
+        && is_canonical_service_logo(&bytes)
+    {
+        snapshot.service_logo_png = Some(bytes);
+        snapshot.service_logo_path = Some(logo_path);
     }
     Some(snapshot)
 }

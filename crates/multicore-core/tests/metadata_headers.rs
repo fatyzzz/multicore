@@ -85,10 +85,13 @@ async fn native_info(
     headers: impl IntoIterator<Item = (&'static str, &'static str)>,
 ) -> Arc<multicore_core::Snapshot> {
     let store = AtomicSnapshot::default();
-    SubscriptionFetcher::new(FakeHttp::new(vec![response(200, bundle(), headers)]))
-        .refresh("https://example.invalid/private-token", &store)
-        .await
-        .unwrap();
+    SubscriptionFetcher::new(FakeHttp::new(vec![
+        response(200, bundle(), headers),
+        Err(FetchError::Network),
+    ]))
+    .refresh("https://example.invalid/private-token", &store)
+    .await
+    .unwrap();
     store.current().unwrap()
 }
 
@@ -226,14 +229,31 @@ async fn announcements_are_aliased_sanitized_bounded_and_semantically_toned() {
 }
 
 #[tokio::test]
-async fn validates_provider_support_action_and_https_logo_urls() {
-    let snapshot = native_info([
-        ("profile-web-page-url", "https://provider.example/home"),
-        ("support-url", "tg://resolve?domain=provider_help"),
-        ("announce-url", "http://provider.example/news"),
-        ("flclashx-servicelogo", "https://cdn.example/logo.png"),
-    ])
-    .await;
+async fn validates_provider_support_action_and_fetches_only_safe_https_logo_urls() {
+    let safe_http = FakeHttp::new(vec![
+        response(
+            200,
+            bundle(),
+            [
+                ("profile-web-page-url", "https://provider.example/home"),
+                ("support-url", "tg://resolve?domain=provider_help"),
+                ("announce-url", "http://provider.example/news"),
+                ("flclashx-servicelogo", "https://cdn.example/logo.png"),
+            ],
+        ),
+        Err(FetchError::Network),
+    ]);
+    let safe_agents = safe_http.agents.clone();
+    let safe_store = AtomicSnapshot::default();
+    SubscriptionFetcher::new(safe_http)
+        .refresh("https://example.invalid/private-token", &safe_store)
+        .await
+        .unwrap();
+    let snapshot = safe_store.current().unwrap();
+    assert_eq!(
+        *safe_agents.lock().unwrap(),
+        [UA_NATIVE, multicore_core::UA_SERVICE_LOGO]
+    );
     assert_eq!(
         snapshot.subscription_home_url(),
         Some("https://provider.example/home")
@@ -246,25 +266,31 @@ async fn validates_provider_support_action_and_https_logo_urls() {
         snapshot.subscription_announcement_url(),
         Some("http://provider.example/news")
     );
-    assert_eq!(
-        snapshot.subscription_logo_url(),
-        Some("https://cdn.example/logo.png")
-    );
 
-    let unsafe_urls = native_info([
-        (
-            "profile-web-page-url",
-            "https://user:secret@provider.example",
-        ),
-        ("support-url", "javascript:alert(1)"),
-        ("banner-button-url", "file:///etc/passwd"),
-        ("flclashx-servicelogo", "http://cdn.example/logo.png"),
-    ])
-    .await;
+    let unsafe_http = FakeHttp::new(vec![response(
+        200,
+        bundle(),
+        [
+            (
+                "profile-web-page-url",
+                "https://user:secret@provider.example",
+            ),
+            ("support-url", "javascript:alert(1)"),
+            ("banner-button-url", "file:///etc/passwd"),
+            ("flclashx-servicelogo", "http://cdn.example/logo.png"),
+        ],
+    )]);
+    let unsafe_agents = unsafe_http.agents.clone();
+    let unsafe_store = AtomicSnapshot::default();
+    SubscriptionFetcher::new(unsafe_http)
+        .refresh("https://example.invalid/private-token", &unsafe_store)
+        .await
+        .unwrap();
+    let unsafe_urls = unsafe_store.current().unwrap();
+    assert_eq!(*unsafe_agents.lock().unwrap(), [UA_NATIVE]);
     assert_eq!(unsafe_urls.subscription_home_url(), None);
     assert_eq!(unsafe_urls.subscription_support_url(), None);
     assert_eq!(unsafe_urls.subscription_announcement_url(), None);
-    assert_eq!(unsafe_urls.subscription_logo_url(), None);
 }
 
 #[tokio::test]

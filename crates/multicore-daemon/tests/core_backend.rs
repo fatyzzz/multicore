@@ -7,8 +7,8 @@ use std::{
 use multicore_core::{
     CoreLogRecord, DiagnosticStream, Engine, FetchError, HttpClient, HttpResponse,
     MihomoRuntimeControl, PersistentSnapshotStore, ProcessController, ProcessDiagnostics,
-    RuntimeCheckState, Snapshot, SubscriptionFetcher, UA_MIHOMO, UA_NATIVE, UA_XRAY,
-    stage_runtime_with_mihomo_control,
+    RuntimeCheckState, Snapshot, SubscriptionFetcher, UA_MIHOMO, UA_NATIVE, UA_SERVICE_LOGO,
+    UA_XRAY, stage_runtime_with_mihomo_control,
 };
 use multicore_daemon::{
     Backend, BackendError, ConnectionState, CoreBackend, ImportSubscriptionRequest,
@@ -184,6 +184,11 @@ impl HttpClient for FixtureHttp {
                 UA_XRAY => {
                     HttpResponse::new(200, xray.into_bytes(), std::iter::empty::<(&str, &str)>())
                 }
+                UA_SERVICE_LOGO => HttpResponse::new(
+                    200,
+                    b"<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'><circle cx='8' cy='8' r='8'/></svg>".to_vec(),
+                    std::iter::empty::<(&str, &str)>(),
+                ),
                 _ => return Err(FetchError::Network),
             };
             Ok(response)
@@ -258,6 +263,9 @@ async fn imported_source_exposes_safe_metadata_and_can_refresh_without_resubmitt
     assert!(info.home_available);
     assert!(info.support_available);
     assert!(info.announcement_action_available);
+    let first_logo = info.service_logo_path.as_deref().unwrap();
+    assert!(first_logo.ends_with("service-logo.png"));
+    assert!(std::path::Path::new(first_logo).is_file());
     assert!(info.refresh_available);
 
     let serialized = serde_json::to_string(&imported).unwrap();
@@ -290,7 +298,14 @@ async fn imported_source_exposes_safe_metadata_and_can_refresh_without_resubmitt
     assert!(refreshed.subscription.as_ref().unwrap().refresh_available);
     assert_eq!(refreshed.profile, imported.profile);
     assert_eq!(refreshed.current_node, imported.current_node);
-    assert_eq!(*calls.lock().unwrap(), [UA_NATIVE, UA_NATIVE]);
+    assert_ne!(
+        refreshed.subscription.as_ref().unwrap().service_logo_path,
+        imported.subscription.as_ref().unwrap().service_logo_path
+    );
+    assert_eq!(
+        *calls.lock().unwrap(),
+        [UA_NATIVE, UA_SERVICE_LOGO, UA_NATIVE, UA_SERVICE_LOGO]
+    );
     assert!(!format!("{refreshed:?}").contains("source-password"));
 }
 
@@ -317,6 +332,7 @@ fn subscription_dto_deserializes_legacy_payloads_with_safe_defaults() {
     assert!(!info.home_available);
     assert!(!info.support_available);
     assert!(!info.announcement_action_available);
+    assert_eq!(info.service_logo_path, None);
 }
 
 fn assert_safe_subscription_metadata_eq(
@@ -344,6 +360,7 @@ fn assert_safe_subscription_metadata_eq(
         actual.announcement_action_available,
         expected.announcement_action_available
     );
+    assert_eq!(actual.service_logo_path, expected.service_logo_path);
     assert_eq!(actual.refresh_available, expected.refresh_available);
 }
 
@@ -660,7 +677,10 @@ async fn successful_fetch_persists_snapshot_and_updates_status_before_supervisio
     assert_eq!(imported.profile.as_deref(), Some("Main"));
     assert_eq!(imported.current_node.as_deref(), Some("Test Node"));
     assert!(!imported.degraded);
-    assert_eq!(*http_calls.lock().unwrap(), vec![UA_NATIVE]);
+    assert_eq!(
+        *http_calls.lock().unwrap(),
+        vec![UA_NATIVE, UA_SERVICE_LOGO]
+    );
 
     assert_eq!(
         backend.connect().await.unwrap().state,

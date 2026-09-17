@@ -73,10 +73,10 @@
 
 **Does NOT cover:** returning raw subscription URLs, arbitrary remote images, or directly opening provider links.
 
-- [ ] **Step 1: Write failing tests** asserting title/usage/announcement/tone/availability serialization, bounded HTTPS `flclashx-servicelogo` download/cache with invalid-image fallback, absence of raw subscription URLs, and preservation of last-good metadata/logo after failed refresh.
-- [ ] **Step 2: Verify RED** with `cargo test -p multicore-daemon --test core_backend --locked`; expect missing DTO fields.
-- [ ] **Step 3: Extend `SubscriptionInfoDto`** with sanitized values and link-availability booleans only.
-- [ ] **Step 4: Verify GREEN** with the target test and `cargo test -p multicore-daemon --lib --locked`.
+- [x] **Step 1: Write failing tests** asserting title/usage/announcement/tone/availability serialization, bounded HTTPS `flclashx-servicelogo` download/cache with invalid-image fallback, absence of raw subscription URLs, and preservation of last-good metadata/logo after failed refresh.
+- [x] **Step 2: Verify RED** with `cargo test -p multicore-daemon --test core_backend --locked`; expect missing DTO fields.
+- [x] **Step 3: Extend `SubscriptionInfoDto`** with sanitized values and link-availability booleans only.
+- [x] **Step 4: Verify GREEN** with the target test and `cargo test -p multicore-daemon --lib --locked`.
 
 ### Task 4: Present the real subscription identity, announcement and logo
 
