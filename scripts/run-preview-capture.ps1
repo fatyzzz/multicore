@@ -1,7 +1,8 @@
 param(
     [string]$OutputDirectory = "artifacts/screenshots",
     [int]$Port = 18787,
-    [ValidateSet("empty", "ready", "connected", "populated-catalog", "error", "selection-pending", "diagnostics", "settings")]
+    [string]$DesktopExecutablePath,
+    [ValidateSet("empty", "ready", "connected", "populated-catalog", "announcement", "error", "selection-pending", "diagnostics", "settings")]
     [string[]]$OnlyScenario
 )
 
@@ -9,14 +10,23 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
 $fixturePath = [System.IO.Path]::GetFullPath((Join-Path $root "scripts/preview-fixture.ps1"))
 $capturePath = [System.IO.Path]::GetFullPath((Join-Path $root "scripts/capture-preview.ps1"))
-$desktopPath = [System.IO.Path]::GetFullPath((Join-Path $root "target/release/multicore-desktop.exe"))
+$desktopPath = if ($DesktopExecutablePath) {
+    [System.IO.Path]::GetFullPath($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($DesktopExecutablePath))
+} else {
+    [System.IO.Path]::GetFullPath((Join-Path $root "target/release/multicore-desktop.exe"))
+}
+$allowedDesktopRoot = [System.IO.Path]::GetFullPath((Join-Path $root "target"))
+$allowedDesktopPrefix = $allowedDesktopRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
 $outputPath = [System.IO.Path]::GetFullPath((Join-Path $root $OutputDirectory))
 $allowedOutputRoot = [System.IO.Path]::GetFullPath((Join-Path $root "artifacts/screenshots"))
 $allowedOutputPrefix = $allowedOutputRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
 $authorizationValue = "preview-local-only"
 
 if (-not (Test-Path -LiteralPath $desktopPath -PathType Leaf)) {
-    throw "Release desktop executable not found: $desktopPath"
+    throw "Desktop executable not found: $desktopPath"
+}
+if (-not $desktopPath.StartsWith($allowedDesktopPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "DesktopExecutablePath must resolve inside $allowedDesktopRoot"
 }
 if ($outputPath -ne $allowedOutputRoot -and -not $outputPath.StartsWith($allowedOutputPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw "OutputDirectory must resolve inside $allowedOutputRoot"
@@ -49,6 +59,7 @@ $scenarios = @(
     @{ Name = "ready"; State = "ready"; Width = 820; Height = 760; SelectionDelay = 0; SelectRoute = $false; OpenDiagnostics = $false; OpenSettings = $false },
     @{ Name = "connected"; State = "connected"; Width = 900; Height = 760; SelectionDelay = 0; SelectRoute = $false; OpenDiagnostics = $false; OpenSettings = $false },
     @{ Name = "populated-catalog"; State = "ready"; Width = 900; Height = 760; SelectionDelay = 0; SelectRoute = $false; OpenDiagnostics = $false; OpenSettings = $false },
+    @{ Name = "announcement"; State = "ready"; Width = 900; Height = 760; SelectionDelay = 0; SelectRoute = $false; OpenDiagnostics = $false; OpenSettings = $false; Announcement = $true },
     @{ Name = "error"; State = "error"; Width = 700; Height = 660; SelectionDelay = 0; SelectRoute = $false; OpenDiagnostics = $false; OpenSettings = $false },
     @{ Name = "selection-pending"; State = "connected"; Width = 820; Height = 760; SelectionDelay = 5000; SelectRoute = $true; OpenDiagnostics = $false; OpenSettings = $false },
     @{ Name = "diagnostics"; State = "connected"; Width = 900; Height = 760; SelectionDelay = 0; SelectRoute = $false; OpenDiagnostics = $true; OpenSettings = $false },
@@ -73,7 +84,8 @@ foreach ($scenario in $scenarios) {
     try {
         $fixtureInfo = [System.Diagnostics.ProcessStartInfo]::new()
         $fixtureInfo.FileName = "powershell.exe"
-        $fixtureInfo.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$fixturePath`" -Port $Port -InitialState $($scenario.State) -SelectionDelayMilliseconds $($scenario.SelectionDelay) -AuthorizationValue $authorizationValue"
+        $announcementArgument = if ($scenario.ContainsKey("Announcement") -and $scenario.Announcement) { " -Announcement" } else { "" }
+        $fixtureInfo.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$fixturePath`" -Port $Port -InitialState $($scenario.State) -SelectionDelayMilliseconds $($scenario.SelectionDelay) -AuthorizationValue $authorizationValue$announcementArgument"
         $fixtureInfo.UseShellExecute = $false
         $fixtureInfo.CreateNoWindow = $true
         $fixtureInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
@@ -90,6 +102,7 @@ foreach ($scenario in $scenarios) {
         $desktopInfo.UseShellExecute = $false
         $desktopInfo.EnvironmentVariables["MULTICORE_DAEMON_URL"] = "http://127.0.0.1:$Port"
         $desktopInfo.EnvironmentVariables["MULTICORE_DAEMON_TOKEN"] = $authorizationValue
+        $desktopInfo.EnvironmentVariables["MULTICORE_PREVIEW_INSTANCE"] = "1"
         $desktop = [System.Diagnostics.Process]::Start($desktopInfo)
 
         $captureArgs = @(

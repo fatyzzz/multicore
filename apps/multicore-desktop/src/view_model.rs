@@ -252,7 +252,7 @@ impl UiState {
                 headline: "Добавьте подписку".into(),
                 supporting: "Вставьте URL — остальное настроим автоматически.".into(),
                 profile: "Нет профиля".into(),
-                node: "Авто".into(),
+                node: "Маршрут не выбран".into(),
                 primary_label: "Подключиться",
                 primary_action: PrimaryAction::None,
                 primary_enabled: false,
@@ -269,7 +269,7 @@ impl UiState {
                 headline: "Добавляем профиль…".into(),
                 supporting: "Проверяем подписку и доступные маршруты.".into(),
                 profile: "Новый профиль".into(),
-                node: "Авто".into(),
+                node: "Маршрут не выбран".into(),
                 primary_label: "Добавляем…",
                 primary_action: PrimaryAction::None,
                 primary_enabled: false,
@@ -2433,6 +2433,10 @@ mod tests {
         assert_eq!(ready.eyebrow, "Готово");
         assert_eq!(ready.node, "Авто");
         assert_eq!(ready.supporting, "");
+
+        for state in [UiState::Empty, UiState::Importing] {
+            assert_eq!(state.presentation().node, "Маршрут не выбран");
+        }
     }
 
     #[test]
@@ -3734,6 +3738,9 @@ mod tests {
             .expect("SmallAction source");
         assert!(small_action.contains("horizontal-stretch: 0;"));
         assert!(small_action.contains("preferred-width: small-label.preferred-width + 28px;"));
+        assert!(small_action.contains("height: 44px;"));
+        assert!(small_action.contains("in property <bool> selected: false;"));
+        assert!(small_action.contains("accessible-description:"));
 
         assert!(source.contains("inline-routes := Rectangle"));
         assert!(source.contains("connection-strip := Rectangle"));
@@ -3792,6 +3799,9 @@ mod tests {
         assert!(source.contains("padding: 20px;"));
         assert!(source.contains("for node in root.catalog-nodes: RouteNodeRow"));
         assert!(source.contains("height: 46px;"));
+        for filter in ["Все", "Система", "Ошибки"] {
+            assert!(source.contains(&format!("selected: root.event-filter == \"{filter}\";")));
+        }
         assert!(!source.contains("connection-center := Rectangle"));
         assert!(!source.contains("height: 238px;"));
 
@@ -4266,7 +4276,12 @@ mod tests {
         assert!(capture_helper.contains(") -ge 160); Name = \"control-center content\""));
         assert!(
             capture_helper.contains("ExpectedState -eq \"selection-pending\"")
-                && capture_helper.contains("231 170 69) -lt 3")
+                && capture_helper.contains("$Bitmap.Width - 180")
+                && capture_helper.contains("$Bitmap.Width - 55")
+                && capture_helper
+                    .matches("Get-SemanticPixelCountInRegion")
+                    .count()
+                    >= 3
         );
         let click_helper = capture_helper
             .split("function Click-Preview")
@@ -4274,8 +4289,13 @@ mod tests {
             .and_then(|source| source.split("function Test-ColorNear").next())
             .expect("Click-Preview helper");
         assert!(capture_helper.contains("public static void ClickClient"));
+        assert!(capture_helper.contains("PostMessage(window, 0x0201"));
         assert!(click_helper.contains("[PreviewWindow]::ClickClient($Handle, $ClientX, $ClientY)"));
         assert!(!capture_helper.contains("mouse_event"));
+        assert!(
+            capture_helper
+                .contains("Click-Preview $handle ([Math]::Floor(($Width + 176) / 2)) 420")
+        );
         assert!(
             capture_helper.contains("[System.Drawing.Imaging.PixelFormat]::Format24bppRgb"),
             "captured PNG must be fully opaque instead of inheriting sparse DWM alpha"

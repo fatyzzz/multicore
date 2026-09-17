@@ -27,7 +27,10 @@ pub(crate) struct InstanceGuard {
 pub(crate) struct InstanceGuard;
 
 pub(crate) fn claim_or_forward(activation: &Activation) -> io::Result<Claim> {
-    platform::claim_or_forward(activation)
+    let preview_scope = cfg!(debug_assertions)
+        && std::env::var_os("MULTICORE_PREVIEW_INSTANCE").as_deref()
+            == Some(std::ffi::OsStr::new("1"));
+    platform::claim_or_forward(activation, preview_scope)
 }
 
 fn encode_frame(activation: &Activation) -> Result<Vec<u8>, &'static str> {
@@ -76,11 +79,19 @@ mod platform {
     use windows_sys::Win32::System::Threading::{CreateMutexW, GetCurrentProcessId};
 
     const MUTEX_NAME: &str = "Local\\MultiCore.Desktop.SingleInstance.v1";
+    const PREVIEW_MUTEX_NAME: &str = "Local\\MultiCore.Desktop.Preview.SingleInstance.v1";
     const FORWARD_TIMEOUT: Duration = Duration::from_secs(10);
 
-    pub(super) fn claim_or_forward(activation: &Activation) -> io::Result<Claim> {
-        let pipe_name = current_session_pipe_name()?;
-        let mutex_name = wide_null(MUTEX_NAME);
+    pub(super) fn claim_or_forward(
+        activation: &Activation,
+        preview_scope: bool,
+    ) -> io::Result<Claim> {
+        let pipe_name = current_session_pipe_name(preview_scope)?;
+        let mutex_name = wide_null(if preview_scope {
+            PREVIEW_MUTEX_NAME
+        } else {
+            MUTEX_NAME
+        });
         // SAFETY: the name is NUL-terminated and both optional pointer arguments are null.
         let mutex = unsafe { CreateMutexW(ptr::null(), 0, mutex_name.as_ptr()) };
         if mutex.is_null() {
@@ -176,14 +187,19 @@ mod platform {
         OsStr::new(value).encode_wide().chain(Some(0)).collect()
     }
 
-    fn current_session_pipe_name() -> io::Result<String> {
+    fn current_session_pipe_name(preview_scope: bool) -> io::Result<String> {
         let mut session_id = 0;
         // SAFETY: session_id points to writable storage for the duration of the call.
         if unsafe { ProcessIdToSessionId(GetCurrentProcessId(), &mut session_id) } == 0 {
             return Err(io::Error::last_os_error());
         }
+        let scope = if preview_scope {
+            "Preview.Activation"
+        } else {
+            "Activation"
+        };
         Ok(format!(
-            r"\\.\pipe\MultiCore.Desktop.Activation.v1.{session_id}"
+            r"\\.\pipe\MultiCore.Desktop.{scope}.v1.{session_id}"
         ))
     }
 
@@ -196,7 +212,10 @@ mod platform {
     use std::io;
     use std::sync::mpsc;
 
-    pub(super) fn claim_or_forward(_activation: &Activation) -> io::Result<Claim> {
+    pub(super) fn claim_or_forward(
+        _activation: &Activation,
+        _preview_scope: bool,
+    ) -> io::Result<Claim> {
         let (_sender, activations) = mpsc::channel();
         Ok(Claim::Primary {
             _guard: InstanceGuard,

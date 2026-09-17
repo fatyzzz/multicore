@@ -208,6 +208,9 @@ fn parse_launch_arguments(
     let args = args.into_iter().collect::<Vec<_>>();
     match args.as_slice() {
         [] => Ok(LaunchArguments::foreground()),
+        [argument] if argument == OsStr::new("--quiet-signal-preview") => {
+            Ok(LaunchArguments::foreground())
+        }
         [argument] if argument == OsStr::new("--background") => Ok(LaunchArguments {
             mode: LaunchMode::Background,
             subscription_url: None,
@@ -1331,6 +1334,14 @@ mod window_tests {
         assert!(!initial_window_visible(LaunchMode::Background, true));
         assert!(initial_window_visible(LaunchMode::Background, false));
         assert!(initial_window_visible(LaunchMode::Foreground, true));
+    }
+
+    #[test]
+    fn preview_marker_is_a_foreground_only_capture_argument() {
+        assert_eq!(
+            parse_launch_arguments(["--quiet-signal-preview".into()]),
+            Ok(LaunchArguments::foreground())
+        );
     }
 
     #[test]

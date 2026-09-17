@@ -8,7 +8,7 @@ param(
     [Parameter(Mandatory = $true)]
     [int]$Height,
     [Parameter(Mandatory = $true)]
-    [ValidateSet("empty", "ready", "connected", "populated-catalog", "error", "selection-pending", "diagnostics", "settings")]
+    [ValidateSet("empty", "ready", "connected", "populated-catalog", "announcement", "error", "selection-pending", "diagnostics", "settings")]
     [string]$ExpectedState,
     [switch]$SelectSecondRoute,
     [switch]$OpenDiagnostics,
@@ -42,13 +42,13 @@ public static class PreviewWindow {
     public static extern bool ShowWindowAsync(IntPtr hWnd, int command);
 
     [DllImport("user32.dll")]
-    private static extern IntPtr SendMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
+    private static extern bool PostMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
 
     public static void ClickClient(IntPtr window, int x, int y) {
         IntPtr position = (IntPtr)((y << 16) | (x & 0xffff));
-        SendMessage(window, 0x0200, IntPtr.Zero, position);
-        SendMessage(window, 0x0201, (IntPtr)1, position);
-        SendMessage(window, 0x0202, IntPtr.Zero, position);
+        PostMessage(window, 0x0200, IntPtr.Zero, position);
+        PostMessage(window, 0x0201, (IntPtr)1, position);
+        PostMessage(window, 0x0202, IntPtr.Zero, position);
     }
 
     [DllImport("user32.dll", SetLastError = true)]
@@ -136,6 +136,27 @@ function Get-SemanticPixelCount(
     return $count
 }
 
+function Get-SemanticPixelCountInRegion(
+    [System.Drawing.Bitmap]$Bitmap,
+    [int]$Red,
+    [int]$Green,
+    [int]$Blue,
+    [int]$Left,
+    [int]$Top,
+    [int]$Right,
+    [int]$Bottom
+) {
+    $count = 0
+    for ($y = $Top; $y -le $Bottom; $y++) {
+        for ($x = $Left; $x -le $Right; $x++) {
+            if (Test-ColorNear $Bitmap.GetPixel($x, $y) $Red $Green $Blue 12) {
+                $count++
+            }
+        }
+    }
+    return $count
+}
+
 function Test-PreviewFrame([System.Drawing.Bitmap]$Bitmap, [ref]$Failure) {
     $mid = [Math]::Floor($Bitmap.Width / 2)
     if ($ExpectedState -eq "diagnostics") {
@@ -181,9 +202,13 @@ function Test-PreviewFrame([System.Drawing.Bitmap]$Bitmap, [ref]$Failure) {
         $Failure.Value = "missing error semantic color"
         return $false
     }
-    if ($ExpectedState -eq "selection-pending" -and (Get-SemanticPixelCount $Bitmap 231 170 69) -lt 3) {
-        $Failure.Value = "missing pending semantic color"
-        return $false
+    if ($ExpectedState -eq "selection-pending") {
+        $pendingHeaderPixels = Get-SemanticPixelCountInRegion $Bitmap 231 170 69 ($Bitmap.Width - 180) 238 ($Bitmap.Width - 16) 270
+        $pendingGutterPixels = Get-SemanticPixelCountInRegion $Bitmap 231 170 69 ($Bitmap.Width - 55) 396 ($Bitmap.Width - 15) 445
+        if ($pendingHeaderPixels -lt 3 -or $pendingGutterPixels -lt 2) {
+            $Failure.Value = "missing pending header or selected-row indicator"
+            return $false
+        }
     }
     return $true
 }
@@ -278,12 +303,12 @@ $handle = Get-PreviewWindow
 Start-Sleep -Seconds 2
 Set-PreviewSize $handle
 if ($SelectSecondRoute) {
-    Click-Preview $handle ([Math]::Floor(($Width + 176) / 2)) 634
+    Click-Preview $handle ([Math]::Floor(($Width + 176) / 2)) 420
 }
 if ($OpenDiagnostics) {
-    Click-Preview $handle 88 192
+    Click-Preview $handle 88 122
 }
 if ($OpenSettings) {
-    Click-Preview $handle 88 242
+    Click-Preview $handle 88 174
 }
 Save-Preview $handle

@@ -4,6 +4,7 @@ param(
     [ValidateSet("empty", "ready", "connected", "error")]
     [string]$InitialState = "ready",
     [int]$SelectionDelayMilliseconds = 0,
+    [switch]$Announcement,
     [string]$AuthorizationValue = "preview-local-only"
 )
 
@@ -33,13 +34,15 @@ $copy = @'
   "reserve_route": "\ud83c\uddf8\ud83c\uddea Sweden [se]",
   "main_group": "\ud83c\udf0d \u0421\u0435\u0440\u0432\u0435\u0440",
   "reserve_group": "\ud83c\udfae \u0418\u0433\u0440\u044b",
-  "manual_route": "Без VPN",
+  "manual_route": "\u0411\u0435\u0437 VPN",
+  "announcement": "\u041f\u043b\u0430\u043d\u043e\u0432\u044b\u0435 \u0440\u0430\u0431\u043e\u0442\u044b \u0441\u0435\u0433\u043e\u0434\u043d\u044f \u0432 23:00",
   "local_profile": "\u041b\u043e\u043a\u0430\u043b\u044c\u043d\u044b\u0439 \u043f\u0440\u043e\u0444\u0438\u043b\u044c",
   "error": "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u0440\u0438\u043c\u0435\u043d\u0438\u0442\u044c \u043b\u043e\u043a\u0430\u043b\u044c\u043d\u0443\u044e \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0443. \u041f\u043e\u0432\u0442\u043e\u0440\u0438\u0442\u0435 \u043f\u043e\u043f\u044b\u0442\u043a\u0443.",
   "log_xray": "\u041b\u043e\u043a\u0430\u043b\u044c\u043d\u044b\u0435 SOCKS-\u043c\u043e\u0441\u0442\u044b \u0433\u043e\u0442\u043e\u0432\u044b.",
   "log_mihomo": "\u041a\u043e\u043d\u0442\u0440\u043e\u043b\u043b\u0435\u0440 \u0438 TUN MultiCore \u0433\u043e\u0442\u043e\u0432\u044b."
 }
 '@ | ConvertFrom-Json
+$serviceLogoPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\apps\multicore-desktop\assets\app-icon.svg"))
 
 function Get-Catalog {
     if ($state -eq "empty") {
@@ -80,10 +83,16 @@ function Get-Status {
         subscription = if ($state -eq "empty") { $null } else {
             @{
                 source_name = "subscription.example"
+                display_name = "MultiCore Preview"
+                uploaded_bytes = 1073741824
                 downloaded_bytes = 938375741110
+                used_bytes = 939449482934
                 total_bytes = $null
                 expires_at_unix = 1792851157
                 updated_at_unix = 1789405200
+                announcement_text = if ($Announcement) { $copy.announcement } else { $null }
+                announcement_tone = if ($Announcement) { "info" } else { $null }
+                service_logo_path = $serviceLogoPath
                 refresh_available = $true
             }
         }
@@ -160,6 +169,17 @@ try {
                 Send-JsonResponse $stream 200 (Get-Status)
             } elseif ($method -eq "GET" -and $path.StartsWith("/v1/catalog")) {
                 Send-JsonResponse $stream 200 (Get-Catalog)
+            } elseif ($method -eq "POST" -and $path.StartsWith("/v1/latencies")) {
+                Send-JsonResponse $stream 200 @{
+                    entries = @(
+                        @{ group_id = "group-main"; node_id = "node-auto"; latency_ms = 34; status = "ok" },
+                        @{ group_id = "group-main"; node_id = "node-primary"; latency_ms = 48; status = "ok" },
+                        @{ group_id = "group-main"; node_id = "node-backup"; latency_ms = 81; status = "ok" },
+                        @{ group_id = "group-main"; node_id = "node-reserve"; latency_ms = 126; status = "ok" },
+                        @{ group_id = "group-reserve"; node_id = "node-reserve-auto"; latency_ms = 57; status = "ok" },
+                        @{ group_id = "group-reserve"; node_id = "node-reserve-manual"; latency_ms = 93; status = "ok" }
+                    )
+                }
             } elseif ($method -eq "GET" -and $path.StartsWith("/v1/events")) {
                 Send-JsonResponse $stream 200 @{
                     epoch = "preview-session"

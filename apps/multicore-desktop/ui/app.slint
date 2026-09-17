@@ -94,26 +94,28 @@ component NavItem inherits Rectangle {
 component SmallAction inherits Rectangle {
     in property <string> label;
     in property <bool> enabled: true;
+    in property <bool> selected: false;
     callback activated();
 
     min-width: 88px;
     preferred-width: small-label.preferred-width + 28px;
     max-width: 160px;
     horizontal-stretch: 0;
-    height: 36px;
-    background: root.enabled ? (small-touch.pressed ? Theme.elevated : small-touch.has-hover ? #ffffff0d : transparent) : transparent;
-    border-color: small-focus.has-focus ? Theme.focus : Theme.line;
+    height: 44px;
+    background: root.selected ? #4c9dff18 : root.enabled ? (small-touch.pressed ? Theme.elevated : small-touch.has-hover ? #ffffff0d : transparent) : transparent;
+    border-color: small-focus.has-focus ? Theme.focus : root.selected ? #4c9dff88 : Theme.line;
     border-width: small-focus.has-focus ? 2px : 1px;
     border-radius: 8px;
     opacity: root.enabled ? 1 : 0.45;
     accessible-role: button;
     accessible-label: root.label;
+    accessible-description: root.selected ? "Выбранный фильтр" : "";
     accessible-enabled: root.enabled;
     accessible-action-default => { if (root.enabled) { root.activated(); } }
 
     small-label := Text {
         text: root.label;
-        color: Theme.text-secondary;
+        color: root.selected ? Theme.text-primary : Theme.text-secondary;
         font-family: Theme.font-family;
         font-size: Theme.type-metadata-size;
         font-weight: Theme.weight-semibold;
@@ -340,7 +342,7 @@ export component AppWindow inherits Window {
     in property <string> status-eyebrow: "Профиль не добавлен";
     in property <string> headline: "Добавьте подписку";
     in property <string> supporting: "Вставьте URL — остальное настроим автоматически.";
-    in property <string> node-name: "Авто";
+    in property <string> node-name: "Маршрут не выбран";
     in property <bool> has-profile: false;
     in property <bool> state-busy: false;
     in property <string> primary-label: "Подключить";
@@ -646,8 +648,8 @@ export component AppWindow inherits Window {
                         HorizontalLayout {
                             padding-left: 16px;
                             padding-right: 12px;
-                            padding-top: 8px;
-                            padding-bottom: 7px;
+                            padding-top: 5px;
+                            padding-bottom: 5px;
                             spacing: 12px;
                             VerticalLayout {
                                 spacing: 2px;
@@ -819,11 +821,11 @@ export component AppWindow inherits Window {
                         }
                     }
                     HorizontalLayout {
-                        height: 38px;
+                        height: 44px;
                         spacing: 8px;
-                        SmallAction { label: "Все"; activated => { root.filter-events("Все"); } }
-                        SmallAction { label: "Система"; activated => { root.filter-events("Система"); } }
-                        SmallAction { label: "Ошибки"; activated => { root.filter-events("Ошибки"); } }
+                        SmallAction { label: "Все"; selected: root.event-filter == "Все"; activated => { root.filter-events("Все"); } }
+                        SmallAction { label: "Система"; selected: root.event-filter == "Система"; activated => { root.filter-events("Система"); } }
+                        SmallAction { label: "Ошибки"; selected: root.event-filter == "Ошибки"; activated => { root.filter-events("Ошибки"); } }
                         Rectangle { horizontal-stretch: 1; background: transparent; }
                     }
                     ScrollView {

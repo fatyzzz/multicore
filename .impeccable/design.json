@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-17T17:47:44+07:00",
+  "title": "Design System: MultiCore",
+  "extensions": {
+    "colorMeta": {
+      "canvas": { "role": "neutral", "displayName": "Network Black", "canonical": "#0D0F12", "tonalRamp": ["#08090B", "#0D0F12", "#15181D", "#252A31", "#434B57", "#697584", "#AAB2BC", "#F3F5F7"] },
+      "accent": { "role": "primary", "displayName": "Signal Blue", "canonical": "#4C9DFF", "tonalRamp": ["#07182D", "#0C2B50", "#16477D", "#2467AD", "#3785D9", "#4C9DFF", "#9BC8FF", "#EAF4FF"] },
+      "success": { "role": "semantic", "displayName": "Connected Green", "canonical": "#3CCB7F", "tonalRamp": ["#071F13", "#0B3820", "#125A34", "#1E7F4B", "#2EA763", "#3CCB7F", "#91E5B8", "#E8FAF0"] },
+      "warning": { "role": "semantic", "displayName": "Pending Amber", "canonical": "#E7AA45", "tonalRamp": ["#261A07", "#432D0B", "#694714", "#91651F", "#BA842F", "#E7AA45", "#F1CF91", "#FFF6E5"] },
+      "danger": { "role": "semantic", "displayName": "Failure Red", "canonical": "#F06A6A", "tonalRamp": ["#2A0D0D", "#491616", "#732525", "#A03737", "#CB5050", "#F06A6A", "#F5ADAD", "#FDEDED"] }
+    },
+    "typographyMeta": {
+      "headline": { "displayName": "Connection Headline", "purpose": "The current connection state inside the primary strip." },
+      "title": { "displayName": "Operational Title", "purpose": "Section, provider, and navigation hierarchy." },
+      "body": { "displayName": "Control Body", "purpose": "Actions and concise explanations." },
+      "label": { "displayName": "Telemetry Label", "purpose": "Latency, expiry, usage, and quiet automatic status." }
+    },
+    "shadows": [],
+    "motion": [
+      { "name": "press-feedback", "value": "120ms", "purpose": "Subtle size response on the single connection control." },
+      { "name": "panel-transition", "value": "160-200ms", "purpose": "Maximum duration for an optional page or sheet transition; never perpetual." }
+    ],
+    "breakpoints": [
+      { "name": "minimum-window", "value": "700x620px" },
+      { "name": "default-window", "value": "840x720px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Connection Control",
+      "kind": "custom",
+      "refersTo": "connection-control",
+      "description": "The sole connect/disconnect CTA; provider logo and decorative power badge share one circular target.",
+      "html": "<button class=\"ds-connection\" aria-label=\"Подключиться\"><span class=\"ds-provider\">MC</span><span class=\"ds-power\">⏻</span></button>",
+      "css": ".ds-connection{position:relative;width:72px;height:72px;border-radius:999px;border:1px solid #4c9dff;background:#4c9dff1c;color:#f3f5f7;font:600 14px 'Segoe UI',sans-serif}.ds-connection:hover{background:#4c9dff28}.ds-connection:focus-visible{outline:2px solid #4c9dff;outline-offset:2px}.ds-connection:active{transform:scale(.96)}.ds-provider{display:grid;place-items:center;width:100%;height:100%}.ds-power{position:absolute;right:4px;bottom:4px;display:grid;place-items:center;width:22px;height:22px;border:1px solid #ffffff33;border-radius:999px;background:#0d0f12e8;font-size:12px}"
+    },
+    {
+      "name": "Route Chip",
+      "kind": "chip",
+      "refersTo": "route-chip",
+      "description": "Compact local group navigation with one selected Signal Blue state.",
+      "html": "<button class=\"ds-route-chip\">Российские сайты</button>",
+      "css": ".ds-route-chip{height:44px;padding:0 12px;border:1px solid #ffffff12;border-radius:14px;background:#ffffff08;color:#b8c0ca;font:500 13px 'Segoe UI',sans-serif}.ds-route-chip:hover{border-color:#4c9dff66}.ds-route-chip:focus-visible{outline:2px solid #4c9dff;outline-offset:2px}.ds-route-chip[aria-pressed='true']{border-color:#4c9dff66;background:#4c9dff1f;color:#f3f5f7}"
+    },
+    {
+      "name": "Route Row",
+      "kind": "custom",
+      "refersTo": "route-row",
+      "description": "A compact selectable server row with a stable latency column and reserved state gutter.",
+      "html": "<button class=\"ds-route-row\"><span class=\"ds-route-name\">Sweden</span><span class=\"ds-latency\">79 ms</span><span class=\"ds-state\">✓</span></button>",
+      "css": ".ds-route-row{display:grid;grid-template-columns:1fr 76px 20px;gap:8px;align-items:center;width:100%;height:46px;padding:0 14px;border:1px solid #ffffff12;border-radius:14px;background:#ffffff06;color:#f3f5f7;font:600 14px 'Segoe UI',sans-serif;text-align:left}.ds-route-row:hover{border-color:#4c9dff59}.ds-route-row:focus-visible{outline:2px solid #4c9dff;outline-offset:2px}.ds-latency{text-align:right;color:#3ccb7f;font-size:12px;font-weight:400}.ds-state{text-align:center;color:#4c9dff}"
+    },
+    {
+      "name": "Subscription Shelf",
+      "kind": "card",
+      "refersTo": "subscription-shelf",
+      "description": "A fixed two-line provider summary; refresh errors replace metadata instead of adding height.",
+      "html": "<section class=\"ds-subscription\"><span><strong>Provider</strong><small>12.4 GB / 100 GB · Осталось 30 дней</small></span><button>Обновить</button></section>",
+      "css": ".ds-subscription{display:flex;align-items:center;justify-content:space-between;height:54px;padding:0 12px 0 16px;border-radius:16px;background:#15181d;color:#f3f5f7;font:400 13px 'Segoe UI',sans-serif}.ds-subscription span{display:grid;gap:2px}.ds-subscription small{color:#7f8996;font-size:12px}.ds-subscription button{height:44px;padding:0 12px;border:1px solid #2a3038;border-radius:8px;background:#1c2026;color:#b8c0ca}.ds-subscription button:focus-visible{outline:2px solid #4c9dff;outline-offset:2px}"
+    }
+  ],
+  "narrative": {
+    "northStar": "Signal Grid Control Center",
+    "overview": "MultiCore is a compact native Windows network utility. The interface is operational and calm: one unmistakable connection control, honest subscription state, and routing controls that stay on the same page. Sparse signal-grid guides provide technical character without becoming decoration. Provider identity stays subordinate to the product action.",
+    "keyCharacteristics": [
+      "One dominant connect/disconnect control.",
+      "Dense one-page routing with stable, color-coded latency values.",
+      "Flat tonal depth, quiet borders, and no ornamental effects.",
+      "Sentence-case Russian copy and explicit unknown/error states."
+    ],
+    "rules": [
+      { "name": "The One Accent Rule", "body": "Blue identifies selection, focus, and the primary action. Semantic colors communicate measured state only.", "section": "colors" },
+      { "name": "The Sentence Case Rule", "body": "Status labels and headings use sentence case; uppercase Russian status copy is prohibited.", "section": "typography" },
+      { "name": "The One Boundary Rule", "body": "A surface uses one boundary mechanism at a time. Nested framing is avoided.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do keep connection, subscription, every route group, and the selected server list together on Home.",
+      "Do preserve one clear CTA and at least 44px interactive targets with visible keyboard focus.",
+      "Do display only real metrics and explicit unknown states.",
+      "Do keep provider identity subordinate to the product action."
+    ],
+    "donts": [
+      "Don't add decorative logo/header stacks, duplicate Home headings, or repeated Auto explanations.",
+      "Don't add card soup, fake charts, invented latency, raw YAML/JSON, or duplicated engine switches.",
+      "Don't use emoji as interface chrome; route flags are allowed because they are data.",
+      "Don't expose controls before a real backend action exists."
+    ]
+  }
+}

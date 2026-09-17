@@ -1,66 +1,167 @@
-# MultiCore Design System
+---
+name: MultiCore
+description: Compact native Windows control center for a dual-core network client.
+colors:
+  canvas: "#0D0F12"
+  surface: "#15181D"
+  surface-raised: "#1C2026"
+  stroke: "#2A3038"
+  text-primary: "#F3F5F7"
+  text-secondary: "#B8C0CA"
+  text-muted: "#7F8996"
+  accent: "#4C9DFF"
+  success: "#3CCB7F"
+  warning: "#E7AA45"
+  danger: "#F06A6A"
+typography:
+  headline:
+    fontFamily: "Segoe UI Variable Text, Segoe UI, sans-serif"
+    fontSize: "18px"
+    fontWeight: 600
+  title:
+    fontFamily: "Segoe UI Variable Text, Segoe UI, sans-serif"
+    fontSize: "14px"
+    fontWeight: 600
+  body:
+    fontFamily: "Segoe UI Variable Text, Segoe UI, sans-serif"
+    fontSize: "13px"
+    fontWeight: 400
+  label:
+    fontFamily: "Segoe UI Variable Text, Segoe UI, sans-serif"
+    fontSize: "12px"
+    fontWeight: 400
+rounded:
+  control: "8px"
+  row: "14px"
+  shelf: "16px"
+  connection: "18px"
+  circle: "999px"
+spacing:
+  xs: "4px"
+  sm: "8px"
+  md: "12px"
+  lg: "16px"
+  pane: "20px"
+components:
+  connection-control:
+    backgroundColor: "{colors.surface}"
+    textColor: "{colors.text-primary}"
+    rounded: "{rounded.circle}"
+    size: "72px"
+  route-chip:
+    backgroundColor: "{colors.surface-raised}"
+    textColor: "{colors.text-secondary}"
+    rounded: "{rounded.row}"
+    height: "44px"
+  route-row:
+    backgroundColor: "{colors.surface}"
+    textColor: "{colors.text-primary}"
+    rounded: "{rounded.row}"
+    height: "46px"
+  subscription-shelf:
+    backgroundColor: "{colors.surface}"
+    textColor: "{colors.text-primary}"
+    rounded: "{rounded.shelf}"
+    height: "54px"
+---
 
-## Direction
+# Design System: MultiCore
 
-Native Control Center: a compact Windows network utility with one obvious daily action and deeper operational truth in dedicated sections. It is not a mobile app stretched onto desktop, a provider-branded dashboard, or a grid of equal cards.
+## Overview
 
-## Composition
+**Creative North Star: "Signal Grid Control Center"**
 
-- Default window: approximately 820 × 720 px; minimum 700 × 620 px.
-- A narrow icon-bearing left navigation rail owns only `Главная`, `Состояние`, and `Настройки`.
-- The main pane uses an open connection region, flat rows, and sparse separators. Do not wrap every section in a bordered card.
-- `Главная` is the daily one-page workspace: connect/disconnect, subscription freshness, every route group, and the selected group's server list remain visible together.
-- Selecting a group replaces the inline server list in place. Route selection never navigates away from `Главная`.
-- `Состояние` owns real engine/TUN health and redacted logs. Never invent traffic or latency.
-- `Настройки` owns Windows lifecycle, update, privacy, and advanced controls only when the backend can actually apply them.
+MultiCore is a compact native Windows network utility. The interface feels operational and calm: one unmistakable connection control, honest subscription state, and routing controls that stay on the same page. Sparse signal-grid guides provide technical character without becoming decoration.
 
-## Color
+The product is provider-aware but not provider-branded. A cached provider logo may identify the subscription inside the circular connection control, while a permanent power badge preserves the action affordance. The shell never becomes a marketing dashboard or a mobile layout stretched onto desktop.
 
-- `canvas` `#0D0F12`
-- `surface-1` `#15181D`
-- `surface-2` `#1C2026`
-- `stroke` `#2A3038`
-- `text-primary` `#F3F5F7`
-- `text-secondary` `#B8C0CA`
-- `text-muted` `#7F8996`
-- `accent` `#4C9DFF`
-- `success` `#3CCB7F`
-- `warning` `#E7AA45`
-- `danger` `#F06A6A`
+**Key Characteristics:**
 
-Accent is singular. Green reports connected health; it is not a second CTA color. No gradients, glass, halos, or pure black/white.
+- One dominant connect/disconnect control.
+- Dense one-page routing with stable, color-coded latency values.
+- Flat tonal depth, quiet borders, and no ornamental effects.
+- Sentence-case Russian copy and explicit unknown/error states.
+
+## Colors
+
+The palette is a cool near-black neutral system with one blue action accent and semantic health colors.
+
+**The One Accent Rule.** Blue identifies selection, focus, and the primary action. Green, amber, and red communicate measured state only; they never become competing CTAs.
 
 ## Typography
 
-Use `Segoe UI Variable Text`. Sentence case only; no uppercase Russian status labels.
+**Display and Body Font:** Segoe UI Variable Text with Segoe UI and system sans-serif fallbacks.
 
-- Connection state: 24 px / 600
-- Page title: 20 px / 600
-- Section title and controls: 14 px / 500–600
-- Body: 13 px / 400
-- Metadata: 12 px / 400
-- Numeric values: 16 px / 600 where needed
+**Character:** Native, compact, and highly legible. Numerical latency values use stable right alignment so scanning never moves the column.
 
-## Geometry and Density
+### Hierarchy
 
-- 4 px spacing base; 16–20 px pane inset; 24 px section gap.
-- Rows: 44–48 px. Primary action: 48 px.
-- Radii: 8 px controls, 12 px larger surfaces; pills only for compact status/filter controls.
-- Use one boundary mechanism per surface. No nested cards.
-- Motion: 120 ms press feedback and at most one 160–200 ms page/sheet transition; no perpetual animation.
+- **Headline** (600, 18px): connection state inside the primary strip.
+- **Title** (600, 14px): section and subscription titles.
+- **Body** (400, 13px): controls and explanatory copy.
+- **Label** (400, 12px): metadata, latency, and quiet status text.
 
-## Interaction Truth
+**The Sentence Case Rule.** Status labels and headings use sentence case; uppercase Russian status copy is prohibited.
 
-- Controls name the action: `Подключить`, `Отключить`, `Обновить`, `Повторить`.
-- Group navigation, selected node, queued node, and applied route are visually distinct concepts.
-- Connected selections apply immediately; disconnected selections say `Будет применено после подключения` on the affected row.
-- Mutations expose local pending, success, and actionable failure states.
-- Every interactive target is at least 44 px and keyboard focus remains visible.
+## Layout
 
-## Anti-patterns
+- Default window is approximately 840 × 720px; minimum is 700 × 620px.
+- A 176px navigation rail owns only Home, Status, and Settings.
+- Home starts with the 96px connection strip, then the 54px subscription shelf, optional announcement, group selector, and server list.
+- Every route group and the selected group's servers stay on Home. A route action may refresh or focus Home but never navigates to a separate route page.
+- Group chips are 44px high inside a 60px horizontal scroller so the native scrollbar never covers them.
+- Server rows are 46px high. Their latency uses one fixed 76px right-aligned column plus a permanently reserved 40px selection gutter.
+- Main-pane guides are four local 1px lines at very low opacity. They never animate and never cross into interactive semantics.
 
-- Decorative logo/header stacks, centered mobile title bars, mystery `…` as the main navigation.
-- Ambiguous subscription numbers without `использовано/осталось` semantics.
-- Card soup, fake charts, raw YAML/JSON, duplicated engine switches, or provider marketing.
-- Emoji standing in for UI icons. Route flags remain allowed because they are data.
-- Settings that look functional before a real backend exists.
+## Elevation & Depth
+
+The system is flat by default. Depth comes from tonal surfaces, one-pixel borders, and state-tinted fills; there are no shadows, gradients, glass, blur, or halo glow.
+
+**The One Boundary Rule.** A surface uses one boundary mechanism at a time. Nested borders and card-inside-card framing are avoided.
+
+## Shapes
+
+Controls use 8px corners, route rows and chips use 14px corners, the subscription shelf uses 16px, and the connection strip uses 18px. The 72px connection control is circular. Nested radii follow the outer-radius-equals-inner-radius-plus-inset relationship.
+
+## Components
+
+### Connection Control
+
+- One 72px circular button owns connect/disconnect/retry behavior.
+- A provider logo is clipped inside the button when available.
+- A small decorative power badge remains visible over provider logos; it is not a second action or touch target.
+- Focus, pressed, disabled, success, danger, and neutral states remain visible without motion-heavy effects.
+
+### Subscription Shelf
+
+- Fixed at 54px with exactly two text lines.
+- The first line is the provider title. The second is usage and expiry, or the refresh error in its place.
+- Remote URLs and provider action links are never rendered directly.
+
+### Route Chips and Rows
+
+- Chips navigate groups locally without leaving Home.
+- Rows preserve a fixed latency column and a fixed selection gutter in every state.
+- Pending takes precedence over selected: an ellipsis is shown until the daemon confirms the route, then a checkmark appears.
+- Latency tone is green below 80ms, amber from 80–149ms, and red at 150ms or above; timeouts and unavailable results are red, unknown is muted.
+
+### Navigation
+
+- Home, Status, and Settings are the only persistent destinations.
+- External or tray route actions resolve to Home and may refresh the catalog; no blank route page exists.
+
+## Do's and Don'ts
+
+### Do:
+
+- **Do** keep connection, subscription, every route group, and the selected server list together on Home.
+- **Do** preserve one clear CTA and at least 44px interactive targets with visible keyboard focus.
+- **Do** display only real metrics and explicit unknown states.
+- **Do** keep provider identity subordinate to the product action.
+
+### Don't:
+
+- **Don't** add decorative logo/header stacks, duplicate Home headings, or repeated Auto explanations.
+- **Don't** add card soup, fake charts, invented latency, raw YAML/JSON, or duplicated engine switches.
+- **Don't** use emoji as interface chrome; route flags are allowed because they are data.
+- **Don't** expose controls before a real backend action exists.
