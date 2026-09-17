@@ -14,6 +14,36 @@ function Assert-True {
     if (-not $Condition) { throw "FAIL: $Message" }
 }
 
+function Get-FileHashManifest {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    $resolvedRoot = [IO.Path]::GetFullPath($Root).TrimEnd('\', '/')
+    return @(Get-ChildItem -LiteralPath $resolvedRoot -File -Recurse |
+        ForEach-Object {
+            $relative = $_.FullName.Substring($resolvedRoot.Length).TrimStart('\', '/').Replace('\', '/')
+            [PSCustomObject]@{
+                RelativePath = $relative
+                Sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
+        } |
+        Sort-Object -Property RelativePath)
+}
+
+function Assert-FileHashManifestEqual {
+    param(
+        [Parameter(Mandatory = $true)][object[]]$Expected,
+        [Parameter(Mandatory = $true)][object[]]$Actual
+    )
+
+    Assert-True ($Actual.Count -eq $Expected.Count) "mutable data file count changed from $($Expected.Count) to $($Actual.Count)"
+    for ($index = 0; $index -lt $Expected.Count; $index++) {
+        Assert-True ($Actual[$index].RelativePath -ceq $Expected[$index].RelativePath) `
+            "mutable data file set changed at '$($Expected[$index].RelativePath)'"
+        Assert-True ($Actual[$index].Sha256 -ceq $Expected[$index].Sha256) `
+            "mutable data file changed at '$($Expected[$index].RelativePath)'"
+    }
+}
+
 $installer = [IO.Path]::GetFullPath($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($InstallerPath))
 $package = [IO.Path]::GetFullPath($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($PackagePath))
 Assert-True (Test-Path -LiteralPath $installer -PathType Leaf) 'installer must exist'
@@ -87,16 +117,65 @@ try {
     $archiveSize = (Get-Item -LiteralPath $archive).Length
     $archiveHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
 
-    $apply = Start-Process -FilePath $helper `
-        -ArgumentList @(
-            '--wait-pid', '4294967295',
-            '--archive', $archive,
-            '--target', $current,
-            '--size', [string]$archiveSize,
-            '--sha256', $archiveHash,
-            '--version', '0.1.1') `
-        -Wait -PassThru -WindowStyle Hidden
+    $testLocalAppData = Join-Path $testRoot 'local-app-data'
+    $mutableRoot = Join-Path $testLocalAppData 'MultiCore'
+    $profileGeneration = Join-Path $mutableRoot 'profiles\profile-smoke\snapshot-00000000000000000001'
+    New-Item -ItemType Directory -Path $profileGeneration -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $mutableRoot 'logs') -Force | Out-Null
+    $utf8NoBom = [Text.UTF8Encoding]::new($false)
+    [IO.File]::WriteAllText(
+        (Join-Path $mutableRoot 'preferences.json'),
+        "{`n  `"schema_version`": 1,`n  `"launch_on_startup`": false,`n  `"theme`": `"system`"`n}`n",
+        $utf8NoBom)
+    [IO.File]::WriteAllText(
+        (Join-Path $mutableRoot 'profiles\index.json'),
+        "{`n  `"schema_version`": 1,`n  `"active_profile_id`": `"profile-smoke`",`n  `"profiles`": [{`"id`":`"profile-smoke`",`"current_generation`":1}]`n}`n",
+        $utf8NoBom)
+    [IO.File]::WriteAllText(
+        (Join-Path $profileGeneration 'subscription.json'),
+        "{`n  `"source_url`": `"https://sentinel.invalid/private-token`",`n  `"source_host`": `"sentinel.invalid`",`n  `"updated_at_unix`": 1757959200`n}`n",
+        $utf8NoBom)
+    [IO.File]::WriteAllText(
+        (Join-Path $profileGeneration 'selections.json'),
+        "{`n  `"revision`": 1,`n  `"selections`": {`"proxy-group`": `"node-smoke`"}`n}`n",
+        $utf8NoBom)
+    [IO.File]::WriteAllText(
+        (Join-Path $mutableRoot 'device-identity'),
+        "multicore-smoke-device-00000001`n",
+        $utf8NoBom)
+    [IO.File]::WriteAllText(
+        (Join-Path $mutableRoot 'logs\latest-core.log'),
+        "2025-09-15T12:00:00Z INFO smoke sentinel log line`n",
+        $utf8NoBom)
+    $mutableManifestBefore = Get-FileHashManifest -Root $mutableRoot
+    Assert-True ($mutableManifestBefore.Count -eq 6) 'mutable data fixture must contain all six sentinel files'
+
+    $updaterStdout = Join-Path $testRoot 'updater-stdout.log'
+    $updaterStderr = Join-Path $testRoot 'updater-stderr.log'
+    $previousLocalAppData = [Environment]::GetEnvironmentVariable('LOCALAPPDATA', 'Process')
+    try {
+        [Environment]::SetEnvironmentVariable('LOCALAPPDATA', $testLocalAppData, 'Process')
+        $apply = Start-Process -FilePath $helper `
+            -ArgumentList @(
+                '--wait-pid', '4294967295',
+                '--archive', $archive,
+                '--target', $current,
+                '--size', [string]$archiveSize,
+                '--sha256', $archiveHash,
+                '--version', '0.1.1') `
+            -RedirectStandardOutput $updaterStdout `
+            -RedirectStandardError $updaterStderr `
+            -Wait -PassThru -WindowStyle Hidden
+    } finally {
+        [Environment]::SetEnvironmentVariable('LOCALAPPDATA', $previousLocalAppData, 'Process')
+    }
     Assert-True ($apply.ExitCode -eq 0) "packaged updater exited with $($apply.ExitCode)"
+
+    $mutableManifestAfter = Get-FileHashManifest -Root $mutableRoot
+    Assert-FileHashManifestEqual -Expected $mutableManifestBefore -Actual $mutableManifestAfter
+    $updaterOutput = ([IO.File]::ReadAllText($updaterStdout) + [IO.File]::ReadAllText($updaterStderr))
+    Assert-True (-not $updaterOutput.Contains('private-token')) 'updater output must not contain the subscription credential marker'
+    Assert-True (-not $updaterOutput.Contains('https://sentinel.invalid/private-token')) 'updater output must not contain the credential-bearing subscription URL'
 
     Assert-True (Test-Path -LiteralPath (Join-Path $current 'MultiCore.exe') -PathType Leaf) 'updated payload must be published back to current'
     Assert-True ((Get-FileHash -LiteralPath $uninstaller -Algorithm SHA256).Hash -ceq $uninstallerHash) 'app update must preserve the uninstaller executable'
@@ -136,12 +215,13 @@ try {
     $preservedAutostart = Get-ItemPropertyValue -LiteralPath $runKey -Name 'MultiCore'
     Assert-True ($preservedAutostart -ceq $foreignAutostart) 'uninstall must preserve a foreign replacement autostart value'
 
-    Write-Output 'PASS: packaged updater boundary and ownership-safe uninstall cleanup'
+    Write-Output 'PASS: packaged updater preserves mutable data without credential leakage and ownership-safe uninstall cleanup'
 } finally {
     $resolvedRoot = [IO.Path]::GetFullPath($testRoot)
     $temporaryPrefix = $temporaryBase.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    $resolvedRootName = [IO.Path]::GetFileName($resolvedRoot.TrimEnd('\', '/'))
     if ($resolvedRoot.StartsWith($temporaryPrefix, [StringComparison]::OrdinalIgnoreCase) -and
-        $resolvedRoot.Contains('multicore-installed-update-smoke-') -and
+        $resolvedRootName -match '^multicore-installed-update-smoke-[0-9a-f]{32}$' -and
         (Test-Path -LiteralPath $resolvedRoot)) {
         $leftoverUninstaller = Join-Path $installRoot 'unins000.exe'
         if (Test-Path -LiteralPath $leftoverUninstaller -PathType Leaf) {
