@@ -334,8 +334,6 @@ export component AppWindow inherits Window {
     preferred-height: 720px;
     min-width: 700px;
     min-height: 620px;
-    max-width: 1120px;
-    max-height: 1000px;
     background: Theme.canvas;
     default-font-family: Theme.font-family;
 
@@ -412,6 +410,7 @@ export component AppWindow inherits Window {
     callback select-catalog-node(string);
     callback set-launch-at-sign-in(bool);
     callback window-drag();
+    callback window-resize(string);
     callback window-minimize();
     callback window-toggle-maximize();
     callback window-close();
@@ -445,10 +444,10 @@ export component AppWindow inherits Window {
                 border-width: 0px;
 
                 drag-region := Rectangle {
-                    x: 0px;
-                    y: 0px;
-                    width: parent.width - 132px;
-                    height: parent.height;
+                    x: 6px;
+                    y: 6px;
+                    width: parent.width - 138px;
+                    height: parent.height - 6px;
                     background: transparent;
 
                     Image {
@@ -981,5 +980,38 @@ export component AppWindow inherits Window {
             }
         }
         }
+    }
+
+    TouchArea {
+        x: 6px; y: 0px; width: parent.width - 12px; height: 6px;
+        pointer-event(event) => { if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) { root.window-resize("n"); } }
+    }
+    TouchArea {
+        x: parent.width - 6px; y: 6px; width: 6px; height: parent.height - 12px;
+        pointer-event(event) => { if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) { root.window-resize("e"); } }
+    }
+    TouchArea {
+        x: 6px; y: parent.height - 6px; width: parent.width - 12px; height: 6px;
+        pointer-event(event) => { if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) { root.window-resize("s"); } }
+    }
+    TouchArea {
+        x: 0px; y: 6px; width: 6px; height: parent.height - 12px;
+        pointer-event(event) => { if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) { root.window-resize("w"); } }
+    }
+    TouchArea {
+        x: 0px; y: 0px; width: 6px; height: 6px;
+        pointer-event(event) => { if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) { root.window-resize("nw"); } }
+    }
+    TouchArea {
+        x: parent.width - 6px; y: 0px; width: 6px; height: 6px;
+        pointer-event(event) => { if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) { root.window-resize("ne"); } }
+    }
+    TouchArea {
+        x: parent.width - 6px; y: parent.height - 6px; width: 6px; height: 6px;
+        pointer-event(event) => { if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) { root.window-resize("se"); } }
+    }
+    TouchArea {
+        x: 0px; y: parent.height - 6px; width: 6px; height: 6px;
+        pointer-event(event) => { if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) { root.window-resize("sw"); } }
     }
 }

@@ -18,6 +18,7 @@ use std::thread;
 use std::time::Duration;
 
 use daemon::{DaemonClient, DaemonError, UnavailableDaemonClient};
+use preferences::{AppPreferences, PreferenceStore, VisiblePage, WindowBounds};
 use slint::winit_030::WinitWindowAccessor;
 use slint::{
     CloseRequestResponse, ComponentHandle, ModelRc, SharedString, Timer, TimerMode, VecModel,
@@ -31,7 +32,10 @@ use view_model::{
     derive_catalog_display,
 };
 use windows_settings::LaunchAtSignInState;
-use windows_shell::{WindowDisposition as CloseDisposition, close_disposition, next_maximized};
+use windows_shell::{
+    MonitorRect, WindowDisposition, close_disposition, minimize_disposition, next_maximized,
+    parse_resize_edge, restore_bounds,
+};
 
 slint::include_modules!();
 
@@ -45,6 +49,75 @@ struct UiSnapshot {
     catalog: CatalogPresentation,
     diagnostics: DiagnosticsPresentation,
     latency: LatencyPresentation,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WindowObservation {
+    restored_bounds: Option<WindowBounds>,
+    maximized: bool,
+    visible_page: VisiblePage,
+}
+
+struct PersistenceTracker {
+    persisted: AppPreferences,
+    candidate: Option<WindowObservation>,
+}
+
+impl PersistenceTracker {
+    fn new(persisted: AppPreferences) -> Self {
+        Self {
+            persisted,
+            candidate: None,
+        }
+    }
+
+    fn preferences_for(&self, observation: &WindowObservation) -> AppPreferences {
+        let mut next = self.persisted.clone();
+        if let Some(bounds) = &observation.restored_bounds {
+            next.restored_bounds = Some(bounds.clone());
+        }
+        next.maximized = observation.maximized;
+        next.visible_page = observation.visible_page.clone();
+        next
+    }
+
+    fn changed_preferences_for(&self, observation: &WindowObservation) -> Option<AppPreferences> {
+        let next = self.preferences_for(observation);
+        (next != self.persisted).then_some(next)
+    }
+
+    fn observe(&mut self, observation: Option<WindowObservation>) -> Option<AppPreferences> {
+        let Some(observation) = observation else {
+            self.candidate = None;
+            return None;
+        };
+        let stable = self.candidate.as_ref() == Some(&observation);
+        self.candidate = Some(observation.clone());
+        stable
+            .then(|| self.changed_preferences_for(&observation))
+            .flatten()
+    }
+
+    fn mark_persisted(&mut self, preferences: AppPreferences) {
+        self.persisted = preferences;
+    }
+}
+
+fn visible_page_name(page: &VisiblePage) -> &'static str {
+    match page {
+        VisiblePage::Home => "home",
+        VisiblePage::Status => "status",
+        VisiblePage::Settings => "settings",
+    }
+}
+
+fn visible_page_from_name(page: &str) -> Option<VisiblePage> {
+    match page {
+        "home" => Some(VisiblePage::Home),
+        "status" => Some(VisiblePage::Status),
+        "settings" => Some(VisiblePage::Settings),
+        _ => None,
+    }
 }
 
 fn main() -> Result<(), slint::PlatformError> {
@@ -76,11 +149,18 @@ fn main() -> Result<(), slint::PlatformError> {
             }
         };
 
+    let (preference_store, loaded_preferences) = load_preferences();
+    let preference_tracker = Arc::new(Mutex::new(PersistenceTracker::new(
+        loaded_preferences.clone(),
+    )));
+    let preference_store = Arc::new(preference_store);
+
     let model = Arc::new(Mutex::new(DesktopViewModel::new(client)));
     let update_state = Arc::new(Mutex::new(UpdateState::initial()));
 
     let ui = AppWindow::new()?;
     apply_snapshot(&ui, &snapshot(&model.lock().expect("view model lock")));
+    ui.set_local_page(visible_page_name(&loaded_preferences.visible_page).into());
     if let Some(subscription_url) = launch_arguments.subscription_url {
         ui.set_local_page("settings".into());
         ui.set_subscription_draft(subscription_url.into());
@@ -92,6 +172,7 @@ fn main() -> Result<(), slint::PlatformError> {
         runtime_allows_update(&model.lock().expect("view model lock").presentation()),
     );
     apply_launch_at_sign_in(&ui, windows_settings::query_launch_at_sign_in());
+    apply_saved_placement(&ui, &loaded_preferences);
     wire_import(&ui, model.clone());
     wire_subscription_refresh(&ui, model.clone());
     wire_primary_action(&ui, model.clone());
@@ -106,14 +187,26 @@ fn main() -> Result<(), slint::PlatformError> {
     let tray_model_source = model.clone();
     let tray_action_ui = ui.as_weak();
     let tray_action_model = model.clone();
+    let tray_preference_store = preference_store.clone();
+    let tray_preference_tracker = preference_tracker.clone();
     let tray_runtime = tray::start(
         tray_model,
         move || tray_menu_model(&tray_model_source.lock().expect("view model lock")),
-        move |command| handle_tray_command(&tray_action_ui, &tray_action_model, command),
+        move |command| {
+            handle_tray_command(
+                &tray_action_ui,
+                &tray_action_model,
+                command,
+                &tray_preference_store,
+                &tray_preference_tracker,
+            )
+        },
     )
     .map_err(|error| eprintln!("tray unavailable: {error}"))
     .ok();
     wire_window_controls(&ui, tray_runtime.is_some());
+    let _preference_timer =
+        wire_preference_persistence(&ui, preference_store.clone(), preference_tracker.clone());
     wire_updater(&ui, model.clone(), update_state.clone());
     if updater::configured_repository().ok().flatten().is_some() {
         run_update_check(ui.as_weak(), model.clone(), update_state);
@@ -305,6 +398,213 @@ fn apply_update_state(ui: &AppWindow, state: &UpdateState, runtime_idle: bool) {
     ui.set_update_busy(presentation.busy);
 }
 
+fn load_preferences() -> (Option<PreferenceStore>, AppPreferences) {
+    let store = match PreferenceStore::from_local_app_data() {
+        Ok(store) => store,
+        Err(_) => {
+            eprintln!("preferences unavailable");
+            return (None, AppPreferences::default());
+        }
+    };
+    let preferences = match store.load() {
+        Ok(preferences) => preferences,
+        Err(_) => {
+            eprintln!("preferences load failed");
+            AppPreferences::default()
+        }
+    };
+    (Some(store), preferences)
+}
+
+#[cfg(windows)]
+fn monitor_work_area(
+    monitor: &slint::winit_030::winit::monitor::MonitorHandle,
+) -> Option<(
+    slint::winit_030::winit::dpi::PhysicalPosition<i32>,
+    slint::winit_030::winit::dpi::PhysicalSize<u32>,
+)> {
+    use slint::winit_030::winit::dpi::{PhysicalPosition, PhysicalSize};
+    use slint::winit_030::winit::platform::windows::MonitorHandleExtWindows;
+
+    #[repr(C)]
+    #[derive(Default)]
+    struct Rect {
+        left: i32,
+        top: i32,
+        right: i32,
+        bottom: i32,
+    }
+
+    #[repr(C)]
+    #[derive(Default)]
+    struct MonitorInfo {
+        size: u32,
+        monitor: Rect,
+        work: Rect,
+        flags: u32,
+    }
+
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn GetMonitorInfoW(monitor: isize, info: *mut MonitorInfo) -> i32;
+    }
+
+    let mut info = MonitorInfo {
+        size: std::mem::size_of::<MonitorInfo>() as u32,
+        ..MonitorInfo::default()
+    };
+    // SAFETY: `info` has the Win32 MONITORINFO layout and remains writable for the call.
+    if unsafe { GetMonitorInfoW(monitor.hmonitor(), &raw mut info) } == 0 {
+        return None;
+    }
+    let width = u32::try_from(info.work.right.checked_sub(info.work.left)?).ok()?;
+    let height = u32::try_from(info.work.bottom.checked_sub(info.work.top)?).ok()?;
+    (width > 0 && height > 0).then_some((
+        PhysicalPosition::new(info.work.left, info.work.top),
+        PhysicalSize::new(width, height),
+    ))
+}
+
+#[cfg(not(windows))]
+fn monitor_work_area(
+    monitor: &slint::winit_030::winit::monitor::MonitorHandle,
+) -> Option<(
+    slint::winit_030::winit::dpi::PhysicalPosition<i32>,
+    slint::winit_030::winit::dpi::PhysicalSize<u32>,
+)> {
+    Some((monitor.position(), monitor.size()))
+}
+
+fn monitor_rects(window: &slint::winit_030::winit::window::Window) -> Vec<MonitorRect> {
+    let primary = window.primary_monitor();
+    window
+        .available_monitors()
+        .filter_map(|monitor| {
+            let scale = monitor.scale_factor();
+            let (position, size) = monitor_work_area(&monitor)?;
+            let position = position.to_logical::<i32>(scale);
+            let size = size.to_logical::<u32>(scale);
+            Some(MonitorRect {
+                x: position.x,
+                y: position.y,
+                width: size.width,
+                height: size.height,
+                primary: primary.as_ref() == Some(&monitor),
+            })
+        })
+        .collect()
+}
+
+fn set_current_monitor_max_size(window: &slint::winit_030::winit::window::Window) {
+    use slint::winit_030::winit::dpi::LogicalSize;
+
+    let maximum = window.current_monitor().and_then(|monitor| {
+        let (_, size) = monitor_work_area(&monitor)?;
+        let size = size.to_logical::<u32>(monitor.scale_factor());
+        Some(LogicalSize::new(size.width, size.height))
+    });
+    window.set_max_inner_size(maximum);
+}
+
+fn apply_saved_placement(ui: &AppWindow, preferences: &AppPreferences) {
+    use slint::winit_030::winit::dpi::{LogicalPosition, LogicalSize};
+
+    let saved = preferences.restored_bounds.clone();
+    let maximized = preferences.maximized;
+    let _ = ui.window().with_winit_window(|window| {
+        let monitors = monitor_rects(window);
+        if let Some(bounds) = saved.and_then(|saved| restore_bounds(saved, &monitors)) {
+            let _ = window.request_inner_size(LogicalSize::new(bounds.width, bounds.height));
+            window.set_outer_position(LogicalPosition::new(bounds.x, bounds.y));
+        }
+        set_current_monitor_max_size(window);
+        window.set_maximized(maximized);
+    });
+}
+
+fn observe_window(ui: &AppWindow) -> Option<WindowObservation> {
+    let visible_page = visible_page_from_name(ui.get_local_page().as_str())?;
+    ui.window().with_winit_window(|window| {
+        if window.is_minimized() == Some(true) {
+            return None;
+        }
+        let maximized = window.is_maximized();
+        let restored_bounds = if maximized {
+            None
+        } else {
+            let scale = window.scale_factor();
+            let position = window.outer_position().ok()?.to_logical::<i32>(scale);
+            let size = window.inner_size().to_logical::<u32>(scale);
+            Some(WindowBounds {
+                x: position.x,
+                y: position.y,
+                width: size.width,
+                height: size.height,
+            })
+        };
+        Some(WindowObservation {
+            restored_bounds,
+            maximized,
+            visible_page,
+        })
+    })?
+}
+
+fn save_preferences(
+    store: &Option<PreferenceStore>,
+    tracker: &Arc<Mutex<PersistenceTracker>>,
+    preferences: AppPreferences,
+) {
+    let Some(store) = store else {
+        return;
+    };
+    if store.save(&preferences).is_ok() {
+        tracker
+            .lock()
+            .expect("preference tracker lock")
+            .mark_persisted(preferences);
+    } else {
+        eprintln!("preferences save failed");
+    }
+}
+
+fn flush_preferences(
+    ui: &AppWindow,
+    store: &Option<PreferenceStore>,
+    tracker: &Arc<Mutex<PersistenceTracker>>,
+) {
+    let Some(observation) = observe_window(ui) else {
+        return;
+    };
+    let preferences = tracker
+        .lock()
+        .expect("preference tracker lock")
+        .changed_preferences_for(&observation);
+    if let Some(preferences) = preferences {
+        save_preferences(store, tracker, preferences);
+    }
+}
+
+fn wire_preference_persistence(
+    ui: &AppWindow,
+    store: Arc<Option<PreferenceStore>>,
+    tracker: Arc<Mutex<PersistenceTracker>>,
+) -> Timer {
+    let timer = Timer::default();
+    let weak = ui.as_weak();
+    timer.start(TimerMode::Repeated, Duration::from_millis(500), move || {
+        let observation = weak.upgrade().and_then(|ui| observe_window(&ui));
+        let preferences = tracker
+            .lock()
+            .expect("preference tracker lock")
+            .observe(observation);
+        if let Some(preferences) = preferences {
+            save_preferences(&store, &tracker, preferences);
+        }
+    });
+    timer
+}
+
 fn wire_updater(
     ui: &AppWindow,
     model: Arc<Mutex<DesktopViewModel>>,
@@ -396,9 +696,35 @@ fn wire_window_controls(ui: &AppWindow, tray_available: bool) {
     });
 
     let weak = ui.as_weak();
-    ui.on_window_minimize(move || {
+    ui.on_window_minimize(move || match minimize_disposition(tray_available) {
+        WindowDisposition::HideToTray => {
+            if let Some(ui) = weak.upgrade() {
+                let _ = ui.hide();
+            }
+        }
+        WindowDisposition::MinimizeToTaskbar => {
+            if let Some(ui) = weak.upgrade() {
+                ui.window().set_minimized(true);
+            }
+        }
+        WindowDisposition::Exit => {
+            let _ = slint::quit_event_loop();
+        }
+    });
+
+    let weak = ui.as_weak();
+    ui.on_window_resize(move |edge| {
+        let Some(edge) = parse_resize_edge(edge.as_str()) else {
+            return;
+        };
         if let Some(ui) = weak.upgrade() {
-            ui.window().set_minimized(true);
+            let _ = ui.window().with_winit_window(|window| {
+                set_current_monitor_max_size(window);
+                #[cfg(windows)]
+                let _ = window.drag_resize_window(edge.into());
+                #[cfg(not(windows))]
+                let _ = edge;
+            });
         }
     });
 
@@ -424,16 +750,18 @@ fn wire_window_controls(ui: &AppWindow, tray_available: bool) {
 
 fn close_window(weak: &slint::Weak<AppWindow>, tray_available: bool) {
     match close_disposition(tray_available, smoke_close_requested()) {
-        CloseDisposition::HideToTray => {
+        WindowDisposition::HideToTray => {
             if let Some(ui) = weak.upgrade() {
                 let _ = ui.hide();
             }
         }
-        CloseDisposition::Exit => {
+        WindowDisposition::Exit => {
             let _ = slint::quit_event_loop();
         }
-        CloseDisposition::MinimizeToTaskbar => {
-            unreachable!("close disposition never minimizes to the taskbar")
+        WindowDisposition::MinimizeToTaskbar => {
+            if let Some(ui) = weak.upgrade() {
+                ui.window().set_minimized(true);
+            }
         }
     }
 }
@@ -474,6 +802,8 @@ fn handle_tray_command(
     weak: &slint::Weak<AppWindow>,
     model: &Arc<Mutex<DesktopViewModel>>,
     command: TrayCommand,
+    preference_store: &Option<PreferenceStore>,
+    preference_tracker: &Arc<Mutex<PersistenceTracker>>,
 ) {
     let Some(ui) = weak.upgrade() else {
         return;
@@ -505,6 +835,7 @@ fn handle_tray_command(
             ui.invoke_select_catalog_node(node_id.into());
         }
         TrayCommand::Exit => {
+            flush_preferences(&ui, preference_store, preference_tracker);
             let _ = slint::quit_event_loop();
         }
     }
@@ -1240,12 +1571,16 @@ fn apply_catalog(ui: &AppWindow, catalog: &CatalogPresentation) {
 #[cfg(test)]
 mod window_tests {
     use super::{
-        CloseDisposition, LaunchArguments, LaunchMode, activation_for_launch_arguments,
-        close_disposition, initial_window_visible, next_maximized, parse_launch_arguments,
-        runtime_allows_update,
+        LaunchArguments, LaunchMode, PersistenceTracker, WindowObservation,
+        activation_for_launch_arguments, initial_window_visible, next_maximized,
+        parse_launch_arguments, runtime_allows_update, visible_page_from_name, visible_page_name,
     };
+    use crate::preferences::{AppPreferences, VisiblePage, WindowBounds};
     use crate::single_instance::Activation;
     use crate::view_model::UiState;
+    use crate::windows_shell::{
+        WindowDisposition, close_disposition, minimize_disposition, parse_resize_edge,
+    };
 
     #[test]
     fn maximize_toggle_inverts_current_window_state() {
@@ -1255,9 +1590,104 @@ mod window_tests {
 
     #[test]
     fn close_hides_only_when_a_tray_is_available_outside_smoke_mode() {
-        assert_eq!(close_disposition(true, false), CloseDisposition::HideToTray);
-        assert_eq!(close_disposition(false, false), CloseDisposition::Exit);
-        assert_eq!(close_disposition(true, true), CloseDisposition::Exit);
+        assert_eq!(
+            close_disposition(true, false),
+            WindowDisposition::HideToTray
+        );
+        assert_eq!(close_disposition(false, false), WindowDisposition::Exit);
+        assert_eq!(close_disposition(true, true), WindowDisposition::Exit);
+        assert_eq!(minimize_disposition(true), WindowDisposition::HideToTray);
+        assert_eq!(
+            minimize_disposition(false),
+            WindowDisposition::MinimizeToTaskbar
+        );
+    }
+
+    #[test]
+    fn page_names_round_trip_and_unknown_names_are_rejected() {
+        for page in [
+            VisiblePage::Home,
+            VisiblePage::Status,
+            VisiblePage::Settings,
+        ] {
+            assert_eq!(visible_page_from_name(visible_page_name(&page)), Some(page));
+        }
+        assert_eq!(visible_page_from_name("routes"), None);
+    }
+
+    #[test]
+    fn persistence_waits_for_two_stable_ticks_and_skips_unchanged_state() {
+        let initial = AppPreferences::default();
+        let mut tracker = PersistenceTracker::new(initial.clone());
+        let changed = WindowObservation {
+            restored_bounds: Some(WindowBounds {
+                x: 10,
+                y: 20,
+                width: 900,
+                height: 700,
+            }),
+            maximized: false,
+            visible_page: VisiblePage::Settings,
+        };
+
+        assert_eq!(tracker.observe(Some(changed.clone())), None);
+        let persisted = tracker
+            .observe(Some(changed.clone()))
+            .expect("stable change");
+        assert_eq!(persisted.restored_bounds, changed.restored_bounds);
+        assert_eq!(persisted.visible_page, VisiblePage::Settings);
+        tracker.mark_persisted(persisted);
+        assert_eq!(tracker.observe(Some(changed.clone())), None);
+        assert_eq!(tracker.observe(None), None);
+        assert_eq!(tracker.observe(Some(changed)), None);
+    }
+
+    #[test]
+    fn maximized_observation_preserves_last_restored_bounds() {
+        let initial = AppPreferences {
+            restored_bounds: Some(WindowBounds {
+                x: 1,
+                y: 2,
+                width: 800,
+                height: 650,
+            }),
+            ..AppPreferences::default()
+        };
+        let mut tracker = PersistenceTracker::new(initial.clone());
+        let maximized = WindowObservation {
+            restored_bounds: None,
+            maximized: true,
+            visible_page: VisiblePage::Status,
+        };
+        assert_eq!(tracker.observe(Some(maximized.clone())), None);
+        let saved = tracker
+            .observe(Some(maximized))
+            .expect("stable maximized change");
+        assert_eq!(saved.restored_bounds, initial.restored_bounds);
+        assert!(saved.maximized);
+        assert_eq!(saved.visible_page, VisiblePage::Status);
+    }
+
+    #[test]
+    fn native_resize_and_persistence_source_contract() {
+        let rust = include_str!("main.rs");
+        let slint = include_str!("../ui/app.slint");
+        assert!(rust.contains("ui.on_window_resize"));
+        assert!(rust.contains("parse_resize_edge"));
+        assert!(rust.contains("drag_resize_window"));
+        assert!(rust.contains("PreferenceStore::from_local_app_data()"));
+        assert!(rust.contains("TimerMode::Repeated, Duration::from_millis(500)"));
+        assert!(rust.contains("flush_preferences"));
+        assert!(!slint.contains("max-width: 1120px"));
+        assert!(!slint.contains("max-height: 1000px"));
+        assert!(slint.contains("callback window-resize(string)"));
+        for edge in ["n", "ne", "e", "se", "s", "sw", "w", "nw"] {
+            assert!(parse_resize_edge(edge).is_some(), "missing {edge}");
+            assert!(
+                slint.contains(&format!("root.window-resize(\"{edge}\")")),
+                "missing Slint hit region for {edge}"
+            );
+        }
     }
 
     #[test]

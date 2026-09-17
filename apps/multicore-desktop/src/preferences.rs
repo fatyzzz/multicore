@@ -72,6 +72,7 @@ impl PreferenceStore {
         Self { path }
     }
 
+    #[cfg(test)]
     pub fn path(&self) -> &Path {
         &self.path
     }
