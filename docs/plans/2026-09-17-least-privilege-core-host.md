@@ -36,13 +36,13 @@
 - Create: `crates/multicore-daemon/src/elevated_controller.rs`
 - Add focused Windows integration tests beside each implementation.
 
-- [ ] Write RED tests for oversized, truncated, trailing, unknown-version, unknown-command, arbitrary-path, and invalid UTF-8 frames.
-- [ ] Define fixed commands only: `StartXray`, `StartMihomo`, `Stop`, `Diagnostics`, `Shutdown`.
-- [ ] Keep executable paths and broker secrets out of argv, environment, errors, and logs.
-- [ ] Create the pipe with `FILE_FLAG_FIRST_PIPE_INSTANCE`, message mode, `PIPE_REJECT_REMOTE_CLIENTS`, current-user/SYSTEM DACL, and 64 KiB maximum frames.
-- [ ] Verify client/server PIDs in both directions before exchanging a fresh broker session secret.
-- [ ] Treat pipe EOF as a mandatory cleanup signal and UAC cancellation as `ElevationCancelled`.
-- [ ] Run protocol tests, Clippy with warnings denied, and leak scans over command lines/log fixtures.
+- [x] Write RED tests for oversized, truncated, trailing, unknown-version, unknown-command, arbitrary-path, and invalid UTF-8 frames.
+- [x] Define fixed commands only: `StartXray`, `StartMihomo`, `Stop`, `Diagnostics`, `Shutdown`.
+- [x] Keep executable paths and broker secrets out of argv, environment, errors, and logs.
+- [x] Create the pipe with `FILE_FLAG_FIRST_PIPE_INSTANCE`, message mode, `PIPE_REJECT_REMOTE_CLIENTS`, current-user/SYSTEM DACL, and 64 KiB maximum frames.
+- [x] Verify client/server PIDs in both directions before exchanging a fresh broker session secret.
+- [x] Treat pipe EOF as a mandatory cleanup signal and UAC cancellation as `ElevationCancelled`.
+- [x] Run protocol tests, Clippy with warnings denied, and leak scans over command lines/log fixtures.
 
 ### Task 3: Move Xray and Mihomo ownership into the elevated host
 
