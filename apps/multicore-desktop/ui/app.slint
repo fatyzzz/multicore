@@ -423,9 +423,11 @@ export component AppWindow inherits Window {
         }
     }
 
-    global-keys := FocusScope {
-        width: parent.width;
-        height: parent.height;
+    visual-frame := FocusScope {
+        x: 6px;
+        y: 6px;
+        width: parent.width - 12px;
+        height: parent.height - 12px;
         key-pressed(event) => {
             if (event.text == Key.Escape) {
                 root.escape-pressed();
@@ -444,10 +446,10 @@ export component AppWindow inherits Window {
                 border-width: 0px;
 
                 drag-region := Rectangle {
-                    x: 6px;
-                    y: 6px;
-                    width: parent.width - 138px;
-                    height: parent.height - 6px;
+                    x: 0px;
+                    y: 0px;
+                    width: parent.width - 132px;
+                    height: parent.height;
                     background: transparent;
 
                     Image {

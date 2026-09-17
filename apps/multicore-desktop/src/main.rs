@@ -33,8 +33,8 @@ use view_model::{
 };
 use windows_settings::LaunchAtSignInState;
 use windows_shell::{
-    MonitorRect, WindowDisposition, close_disposition, minimize_disposition, next_maximized,
-    parse_resize_edge, restore_bounds,
+    CloseDisposition, MinimizeDisposition, MonitorRect, close_disposition, minimize_disposition,
+    next_maximized, parse_resize_edge, restore_bounds,
 };
 
 slint::include_modules!();
@@ -697,18 +697,15 @@ fn wire_window_controls(ui: &AppWindow, tray_available: bool) {
 
     let weak = ui.as_weak();
     ui.on_window_minimize(move || match minimize_disposition(tray_available) {
-        WindowDisposition::HideToTray => {
+        MinimizeDisposition::HideToTray => {
             if let Some(ui) = weak.upgrade() {
                 let _ = ui.hide();
             }
         }
-        WindowDisposition::MinimizeToTaskbar => {
+        MinimizeDisposition::MinimizeToTaskbar => {
             if let Some(ui) = weak.upgrade() {
                 ui.window().set_minimized(true);
             }
-        }
-        WindowDisposition::Exit => {
-            let _ = slint::quit_event_loop();
         }
     });
 
@@ -750,18 +747,13 @@ fn wire_window_controls(ui: &AppWindow, tray_available: bool) {
 
 fn close_window(weak: &slint::Weak<AppWindow>, tray_available: bool) {
     match close_disposition(tray_available, smoke_close_requested()) {
-        WindowDisposition::HideToTray => {
+        CloseDisposition::HideToTray => {
             if let Some(ui) = weak.upgrade() {
                 let _ = ui.hide();
             }
         }
-        WindowDisposition::Exit => {
+        CloseDisposition::Exit => {
             let _ = slint::quit_event_loop();
-        }
-        WindowDisposition::MinimizeToTaskbar => {
-            if let Some(ui) = weak.upgrade() {
-                ui.window().set_minimized(true);
-            }
         }
     }
 }
@@ -1579,7 +1571,8 @@ mod window_tests {
     use crate::single_instance::Activation;
     use crate::view_model::UiState;
     use crate::windows_shell::{
-        WindowDisposition, close_disposition, minimize_disposition, parse_resize_edge,
+        CloseDisposition, MinimizeDisposition, close_disposition, minimize_disposition,
+        parse_resize_edge,
     };
 
     #[test]
@@ -1590,17 +1583,20 @@ mod window_tests {
 
     #[test]
     fn close_hides_only_when_a_tray_is_available_outside_smoke_mode() {
-        assert_eq!(
-            close_disposition(true, false),
-            WindowDisposition::HideToTray
-        );
-        assert_eq!(close_disposition(false, false), WindowDisposition::Exit);
-        assert_eq!(close_disposition(true, true), WindowDisposition::Exit);
-        assert_eq!(minimize_disposition(true), WindowDisposition::HideToTray);
+        assert_eq!(close_disposition(true, false), CloseDisposition::HideToTray);
+        assert_eq!(close_disposition(false, false), CloseDisposition::Exit);
+        assert_eq!(close_disposition(true, true), CloseDisposition::Exit);
+        assert_eq!(minimize_disposition(true), MinimizeDisposition::HideToTray);
         assert_eq!(
             minimize_disposition(false),
-            WindowDisposition::MinimizeToTaskbar
+            MinimizeDisposition::MinimizeToTaskbar
         );
+        let close_handler = include_str!("main.rs")
+            .split("fn close_window(")
+            .nth(1)
+            .and_then(|source| source.split("fn tray_menu_model").next())
+            .expect("close handler");
+        assert!(!close_handler.contains("MinimizeToTaskbar"));
     }
 
     #[test]
@@ -1681,6 +1677,15 @@ mod window_tests {
         assert!(!slint.contains("max-width: 1120px"));
         assert!(!slint.contains("max-height: 1000px"));
         assert!(slint.contains("callback window-resize(string)"));
+        let visual_frame = slint
+            .split("visual-frame := FocusScope {")
+            .nth(1)
+            .and_then(|source| source.split("key-pressed(event)").next())
+            .expect("inset visual frame");
+        assert!(visual_frame.contains("x: 6px;"));
+        assert!(visual_frame.contains("y: 6px;"));
+        assert!(visual_frame.contains("width: parent.width - 12px;"));
+        assert!(visual_frame.contains("height: parent.height - 12px;"));
         for edge in ["n", "ne", "e", "se", "s", "sw", "w", "nw"] {
             assert!(parse_resize_edge(edge).is_some(), "missing {edge}");
             assert!(

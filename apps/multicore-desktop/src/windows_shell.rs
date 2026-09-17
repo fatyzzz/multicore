@@ -7,11 +7,19 @@ pub const DEFAULT_HEIGHT: u32 = 720;
 
 const REACHABLE_TITLE_BAR: i64 = 64;
 
+#[cfg(test)]
+pub const RESIZE_BORDER: u32 = 6;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum WindowDisposition {
+pub enum CloseDisposition {
+    HideToTray,
+    Exit,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MinimizeDisposition {
     HideToTray,
     MinimizeToTaskbar,
-    Exit,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,19 +43,131 @@ pub struct MonitorRect {
     pub primary: bool,
 }
 
-pub fn minimize_disposition(tray_available: bool) -> WindowDisposition {
-    if tray_available {
-        WindowDisposition::HideToTray
-    } else {
-        WindowDisposition::MinimizeToTaskbar
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HitRect {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[cfg(test)]
+impl HitRect {
+    pub fn intersects(self, other: Self) -> bool {
+        self.x < other.x.saturating_add(other.width)
+            && other.x < self.x.saturating_add(self.width)
+            && self.y < other.y.saturating_add(other.height)
+            && other.y < self.y.saturating_add(self.height)
     }
 }
 
-pub fn close_disposition(tray_available: bool, smoke_mode: bool) -> WindowDisposition {
-    if tray_available && !smoke_mode {
-        WindowDisposition::HideToTray
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ResizeHitLayout {
+    pub visual_frame: HitRect,
+    window_width: u32,
+    window_height: u32,
+}
+
+#[cfg(test)]
+impl ResizeHitLayout {
+    pub fn new(window_width: u32, window_height: u32) -> Option<Self> {
+        let inset = RESIZE_BORDER.checked_mul(2)?;
+        let frame_width = window_width.checked_sub(inset)?;
+        let frame_height = window_height.checked_sub(inset)?;
+        (frame_width >= 132 && frame_height >= 44).then_some(Self {
+            visual_frame: HitRect {
+                x: RESIZE_BORDER,
+                y: RESIZE_BORDER,
+                width: frame_width,
+                height: frame_height,
+            },
+            window_width,
+            window_height,
+        })
+    }
+
+    pub fn resize_hits(self) -> [HitRect; 8] {
+        let border = RESIZE_BORDER;
+        let middle_width = self.window_width - border * 2;
+        let middle_height = self.window_height - border * 2;
+        [
+            HitRect {
+                x: border,
+                y: 0,
+                width: middle_width,
+                height: border,
+            },
+            HitRect {
+                x: self.window_width - border,
+                y: border,
+                width: border,
+                height: middle_height,
+            },
+            HitRect {
+                x: border,
+                y: self.window_height - border,
+                width: middle_width,
+                height: border,
+            },
+            HitRect {
+                x: 0,
+                y: border,
+                width: border,
+                height: middle_height,
+            },
+            HitRect {
+                x: 0,
+                y: 0,
+                width: border,
+                height: border,
+            },
+            HitRect {
+                x: self.window_width - border,
+                y: 0,
+                width: border,
+                height: border,
+            },
+            HitRect {
+                x: self.window_width - border,
+                y: self.window_height - border,
+                width: border,
+                height: border,
+            },
+            HitRect {
+                x: 0,
+                y: self.window_height - border,
+                width: border,
+                height: border,
+            },
+        ]
+    }
+
+    pub fn title_buttons(self) -> [HitRect; 3] {
+        let first_x = self.visual_frame.x + self.visual_frame.width - 132;
+        [0, 44, 88].map(|offset| HitRect {
+            x: first_x + offset,
+            y: self.visual_frame.y,
+            width: 44,
+            height: 44,
+        })
+    }
+}
+
+pub fn minimize_disposition(tray_available: bool) -> MinimizeDisposition {
+    if tray_available {
+        MinimizeDisposition::HideToTray
     } else {
-        WindowDisposition::Exit
+        MinimizeDisposition::MinimizeToTaskbar
+    }
+}
+
+pub fn close_disposition(tray_available: bool, smoke_mode: bool) -> CloseDisposition {
+    if tray_available && !smoke_mode {
+        CloseDisposition::HideToTray
+    } else {
+        CloseDisposition::Exit
     }
 }
 
@@ -203,8 +323,9 @@ impl From<ResizeEdge> for slint::winit_030::winit::window::ResizeDirection {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_HEIGHT, DEFAULT_WIDTH, MonitorRect, ResizeEdge, WindowDisposition,
-        close_disposition, minimize_disposition, next_maximized, parse_resize_edge, restore_bounds,
+        CloseDisposition, DEFAULT_HEIGHT, DEFAULT_WIDTH, MinimizeDisposition, MonitorRect,
+        ResizeEdge, ResizeHitLayout, close_disposition, minimize_disposition, next_maximized,
+        parse_resize_edge, restore_bounds,
     };
     use crate::preferences::WindowBounds;
 
@@ -481,18 +602,43 @@ mod tests {
 
     #[test]
     fn lifecycle_dispositions_cover_tray_and_smoke_modes() {
-        assert_eq!(minimize_disposition(true), WindowDisposition::HideToTray);
+        assert_eq!(minimize_disposition(true), MinimizeDisposition::HideToTray);
         assert_eq!(
             minimize_disposition(false),
-            WindowDisposition::MinimizeToTaskbar
+            MinimizeDisposition::MinimizeToTaskbar
         );
-        assert_eq!(
-            close_disposition(true, false),
-            WindowDisposition::HideToTray
-        );
-        assert_eq!(close_disposition(false, false), WindowDisposition::Exit);
-        assert_eq!(close_disposition(true, true), WindowDisposition::Exit);
-        assert_eq!(close_disposition(false, true), WindowDisposition::Exit);
+        assert_eq!(close_disposition(true, false), CloseDisposition::HideToTray);
+        assert_eq!(close_disposition(false, false), CloseDisposition::Exit);
+        assert_eq!(close_disposition(true, true), CloseDisposition::Exit);
+        assert_eq!(close_disposition(false, true), CloseDisposition::Exit);
+    }
+
+    #[test]
+    fn resize_border_is_disjoint_from_visual_frame_and_title_controls() {
+        let layout = ResizeHitLayout::new(840, 720).expect("desktop minimum exceeds border");
+        assert_eq!(layout.visual_frame.x, 6);
+        assert_eq!(layout.visual_frame.y, 6);
+        assert_eq!(layout.visual_frame.width, 828);
+        assert_eq!(layout.visual_frame.height, 708);
+        for hit in layout.resize_hits() {
+            assert!(!hit.intersects(layout.visual_frame));
+            for button in layout.title_buttons() {
+                assert!(!hit.intersects(button));
+            }
+        }
+    }
+
+    #[test]
+    fn resize_corners_own_the_corner_pixels_instead_of_edges() {
+        let layout = ResizeHitLayout::new(700, 620).expect("desktop minimum exceeds border");
+        let hits = layout.resize_hits();
+        for corner in &hits[4..] {
+            for edge in &hits[..4] {
+                assert!(!corner.intersects(*edge));
+            }
+        }
+        assert_eq!(hits[4].width, 6);
+        assert_eq!(hits[4].height, 6);
     }
 
     #[test]
