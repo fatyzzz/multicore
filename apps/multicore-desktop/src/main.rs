@@ -9,6 +9,7 @@ mod tray;
 mod updater;
 mod view_model;
 mod windows_settings;
+mod windows_shell;
 
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
@@ -30,6 +31,7 @@ use view_model::{
     derive_catalog_display,
 };
 use windows_settings::LaunchAtSignInState;
+use windows_shell::{WindowDisposition as CloseDisposition, close_disposition, next_maximized};
 
 slint::include_modules!();
 
@@ -282,26 +284,8 @@ fn initial_window_visible(launch_mode: LaunchMode, tray_available: bool) -> bool
     launch_mode == LaunchMode::Foreground || !tray_available
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CloseDisposition {
-    HideToTray,
-    Exit,
-}
-
-fn close_disposition(tray_available: bool, smoke_mode: bool) -> CloseDisposition {
-    if tray_available && !smoke_mode {
-        CloseDisposition::HideToTray
-    } else {
-        CloseDisposition::Exit
-    }
-}
-
 fn smoke_close_requested() -> bool {
     std::env::var_os("MULTICORE_SMOKE_EXIT_ON_CLOSE").as_deref() == Some(std::ffi::OsStr::new("1"))
-}
-
-fn next_maximized(current: bool) -> bool {
-    !current
 }
 
 fn runtime_allows_update(presentation: &StatePresentation) -> bool {
@@ -447,6 +431,9 @@ fn close_window(weak: &slint::Weak<AppWindow>, tray_available: bool) {
         }
         CloseDisposition::Exit => {
             let _ = slint::quit_event_loop();
+        }
+        CloseDisposition::MinimizeToTaskbar => {
+            unreachable!("close disposition never minimizes to the taskbar")
         }
     }
 }
