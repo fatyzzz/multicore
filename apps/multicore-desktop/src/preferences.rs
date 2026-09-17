@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -65,20 +66,7 @@ pub struct PreferenceStore {
 
 impl PreferenceStore {
     pub fn from_local_app_data() -> io::Result<Self> {
-        let root = std::env::var_os("LOCALAPPDATA").ok_or_else(|| {
-            io::Error::new(io::ErrorKind::NotFound, "LOCALAPPDATA is unavailable")
-        })?;
-        if root.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "LOCALAPPDATA is empty",
-            ));
-        }
-        Ok(Self::at(
-            PathBuf::from(root)
-                .join(PREFERENCES_DIRECTORY)
-                .join(PREFERENCES_FILE),
-        ))
+        preference_path_from_local_app_data(std::env::var_os("LOCALAPPDATA")).map(Self::at)
     }
 
     pub fn at(path: PathBuf) -> Self {
@@ -185,6 +173,25 @@ impl PreferenceStore {
         atomic_replace(&self.path, &quarantine)?;
         sync_directory(parent)
     }
+}
+
+fn preference_path_from_local_app_data(root: Option<OsString>) -> io::Result<PathBuf> {
+    let root = root
+        .map(PathBuf::from)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "LOCALAPPDATA is unavailable"))?;
+    if root.as_os_str().is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "LOCALAPPDATA is empty",
+        ));
+    }
+    if !root.is_absolute() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "LOCALAPPDATA is not absolute",
+        ));
+    }
+    Ok(root.join(PREFERENCES_DIRECTORY).join(PREFERENCES_FILE))
 }
 
 fn reject_parent_components(path: &Path) -> io::Result<()> {
@@ -578,7 +585,25 @@ mod tests {
 
     use super::{
         AppPreferences, PREFERENCES_SCHEMA_VERSION, PreferenceStore, VisiblePage, WindowBounds,
+        preference_path_from_local_app_data,
     };
+
+    #[test]
+    fn local_app_data_root_must_be_nonempty_and_absolute() {
+        assert!(preference_path_from_local_app_data(None).is_err());
+        assert!(preference_path_from_local_app_data(Some("".into())).is_err());
+        assert!(preference_path_from_local_app_data(Some("relative-root".into())).is_err());
+    }
+
+    #[test]
+    fn absolute_local_app_data_root_builds_the_multicore_preferences_path() {
+        let root = tempfile::tempdir().unwrap();
+
+        assert_eq!(
+            preference_path_from_local_app_data(Some(root.path().as_os_str().to_owned())).unwrap(),
+            root.path().join("MultiCore").join("preferences.json")
+        );
+    }
 
     #[test]
     fn round_trip_keeps_only_durable_desktop_state() {
