@@ -993,7 +993,7 @@ fn wire_window_controls(ui: &AppWindow, tray_available: bool) {
         MinimizeDisposition::HideToTray => {
             if let Some(ui) = weak.upgrade() {
                 ui.set_shell_active(false);
-                let _ = ui.hide();
+                hide_window_to_tray(&ui);
             }
         }
         MinimizeDisposition::MinimizeToTaskbar => {
@@ -1046,13 +1046,26 @@ fn close_window(weak: &slint::Weak<AppWindow>, tray_available: bool) {
         CloseDisposition::HideToTray => {
             if let Some(ui) = weak.upgrade() {
                 ui.set_shell_active(false);
-                let _ = ui.hide();
+                hide_window_to_tray(&ui);
             }
         }
         CloseDisposition::Exit => {
             let _ = slint::quit_event_loop();
         }
     }
+}
+
+/// Hide the native surface without deregistering the Slint window.
+///
+/// `slint::Window::hide()` releases the framework keep-alive for the window.
+/// When the tray is the only remaining recovery surface that lets the event
+/// loop terminate as soon as the title bar is closed/minimized. Keep the
+/// component registered and only hide its Winit window instead; tray events
+/// and timers can then continue to run until the explicit tray Exit action.
+fn hide_window_to_tray(ui: &AppWindow) {
+    let _ = ui.window().with_winit_window(|window| {
+        window.set_visible(false);
+    });
 }
 
 fn tray_menu_model(model: &DesktopViewModel) -> TrayMenuModel {
@@ -2010,6 +2023,19 @@ mod window_tests {
             .and_then(|source| source.split("fn tray_menu_model").next())
             .expect("close handler");
         assert!(!close_handler.contains("MinimizeToTaskbar"));
+    }
+
+    #[test]
+    fn tray_hide_keeps_slint_window_registered_for_tray_events() {
+        let source = include_str!("main.rs");
+        let helper = source
+            .split("fn hide_window_to_tray(")
+            .nth(1)
+            .and_then(|source| source.split("fn tray_menu_model").next())
+            .expect("tray hide helper");
+        assert!(helper.contains("with_winit_window"));
+        assert!(helper.contains("window.set_visible(false)"));
+        assert!(!helper.contains("ui.hide()"));
     }
 
     #[test]
