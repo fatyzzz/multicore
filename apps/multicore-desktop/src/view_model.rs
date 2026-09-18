@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     path::Path,
     sync::{Arc, OnceLock},
     time::{SystemTime, UNIX_EPOCH},
@@ -525,6 +526,8 @@ pub struct DesktopViewModel {
     catalog_revision: Option<u64>,
     catalog_groups: Vec<CatalogGroup>,
     selected_catalog_group: Option<String>,
+    restored_route_group: Option<String>,
+    restored_route_nodes: BTreeMap<String, String>,
     catalog_error: Option<String>,
     next_catalog_generation: u64,
     catalog_request_pending: Option<CatalogRequestToken>,
@@ -572,6 +575,8 @@ impl DesktopViewModel {
             catalog_revision: None,
             catalog_groups: Vec::new(),
             selected_catalog_group: None,
+            restored_route_group: None,
+            restored_route_nodes: BTreeMap::new(),
             catalog_error: None,
             next_catalog_generation: 0,
             catalog_request_pending: None,
@@ -1284,6 +1289,45 @@ impl DesktopViewModel {
         true
     }
 
+    /// Supplies the route choices loaded from preferences before the first catalog refresh.
+    /// IDs are opaque daemon values; unknown IDs are ignored when the catalog arrives.
+    pub(crate) fn restore_route_preferences(
+        &mut self,
+        group_id: Option<&str>,
+        selections: &BTreeMap<String, String>,
+    ) {
+        self.restored_route_group = group_id.map(str::to_owned);
+        self.restored_route_nodes = selections.clone();
+        if !self.catalog_groups.is_empty() {
+            self.apply_restored_route_preferences();
+        }
+    }
+
+    /// Returns the currently selected route IDs in the shape persisted by the desktop shell.
+    pub(crate) fn route_preferences(
+        &self,
+    ) -> Option<(String, Option<String>, BTreeMap<String, String>)> {
+        if self.catalog_groups.is_empty() {
+            return None;
+        }
+        let selections = self
+            .catalog_groups
+            .iter()
+            .filter_map(|group| {
+                group
+                    .nodes
+                    .iter()
+                    .find(|node| node.selected)
+                    .map(|node| (group.id.clone(), node.id.clone()))
+            })
+            .collect();
+        Some((
+            self.presentation().profile,
+            self.selected_catalog_group.clone(),
+            selections,
+        ))
+    }
+
     pub(crate) fn begin_node_selection(&mut self, node_id: &str) -> Option<NodeSelectionRequest> {
         if self.active_selection.is_some()
             || self.catalog_request_pending.is_some()
@@ -1573,6 +1617,7 @@ impl DesktopViewModel {
         if !self.catalog_groups.is_empty() {
             self.latency_queued = true;
         }
+        self.apply_restored_route_preferences();
         if preserve_queued {
             for queued in &self.queued_selections {
                 if let Some(group) = self
@@ -1596,6 +1641,38 @@ impl DesktopViewModel {
                 }
             }
         }
+    }
+
+    fn apply_restored_route_preferences(&mut self) {
+        if self.catalog_groups.is_empty() {
+            return;
+        }
+        if let Some(group_id) = self.restored_route_group.take()
+            && self.catalog_groups.iter().any(|group| group.id == group_id)
+        {
+            self.selected_catalog_group = Some(group_id);
+        }
+        if self.restored_route_nodes.is_empty() {
+            return;
+        }
+        for group in &mut self.catalog_groups {
+            let Some(node_id) = self.restored_route_nodes.get(&group.id) else {
+                continue;
+            };
+            let Some(target_index) = group.nodes.iter().position(|node| node.id == *node_id) else {
+                continue;
+            };
+            for node in &mut group.nodes {
+                node.selected = false;
+            }
+            group.nodes[target_index].selected = true;
+            if group.is_primary
+                && let UiState::Ready { node, .. } = &mut self.state
+            {
+                *node = group.nodes[target_index].label.clone();
+            }
+        }
+        self.restored_route_nodes.clear();
     }
 
     fn restore_selection(&mut self, active: &ActiveSelection) {
@@ -3230,6 +3307,35 @@ mod tests {
     }
 
     #[test]
+    fn restored_route_preferences_are_applied_once_when_catalog_arrives() {
+        let mut view_model = DesktopViewModel::new(Arc::new(MockDaemonClient::ready()));
+        let mut selections = BTreeMap::new();
+        selections.insert("opaque:selected".into(), "opaque:node-c".into());
+        view_model.restore_route_preferences(Some("opaque:selected"), &selections);
+
+        let request = view_model.begin_catalog_request().expect("catalog request");
+        view_model
+            .finish_catalog(request.token, Ok(catalog_fixture()))
+            .expect("catalog completion");
+
+        let presentation = view_model.catalog_presentation();
+        assert_eq!(
+            presentation.selected_group_id.as_deref(),
+            Some("opaque:selected")
+        );
+        let selected = presentation
+            .nodes
+            .iter()
+            .find(|node| node.selected)
+            .expect("restored selected node");
+        assert_eq!(selected.id, "opaque:node-c");
+        assert_eq!(
+            view_model.route_preferences().expect("route preferences").2,
+            selections
+        );
+    }
+
+    #[test]
     fn delayed_catalog_network_call_does_not_hold_the_model_lock() {
         let (started_tx, started_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
@@ -3768,13 +3874,7 @@ mod tests {
             .nth(1)
             .and_then(|source| source.split("ambient-wave-b := Path {").next())
             .expect("wave A block");
-        for required in [
-            "x: root.ambient-motion-active && root.ambient-wave-phase ? -30px : -38px;",
-            "y: root.ambient-motion-active && root.ambient-wave-phase ? 74px : 68px;",
-            "opacity: 0.02;",
-            "animate x { duration: root.ambient-motion-active ? 12s : 0ms;",
-            "animate y { duration: root.ambient-motion-active ? 12s : 0ms;",
-        ] {
+        for required in ["x: -38px;", "y: 68px;", "opacity: 0.004;"] {
             assert!(wave_a.contains(required), "wave A missing: {required}");
         }
         let wave_a_delta = (8_i32, 6_i32);
@@ -3785,17 +3885,16 @@ mod tests {
             .nth(1)
             .and_then(|source| source.split("VerticalLayout {").next())
             .expect("wave B block");
-        for required in [
-            "x: root.ambient-motion-active && root.ambient-wave-phase ? -46px : -38px;",
-            "y: root.ambient-motion-active && root.ambient-wave-phase ? 266px : 272px;",
-            "opacity: 0.03;",
-            "animate x { duration: root.ambient-motion-active ? 18s : 0ms;",
-            "animate y { duration: root.ambient-motion-active ? 18s : 0ms;",
-        ] {
+        for required in ["x: -38px;", "y: 272px;", "opacity: 0.004;"] {
             assert!(wave_b.contains(required), "wave B missing: {required}");
         }
         let wave_b_delta = (8_i32, 6_i32);
         assert!(wave_b_delta.0.pow(2) + wave_b_delta.1.pow(2) <= 10_i32.pow(2));
+        assert!(!wave_layer.contains("animate x"));
+        assert!(!wave_layer.contains("animate y"));
+        for cursor in ["ns-resize", "ew-resize", "nwse-resize", "nesw-resize"] {
+            assert!(source.contains(&format!("mouse-cursor: {cursor};")));
+        }
     }
 
     #[test]

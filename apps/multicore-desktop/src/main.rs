@@ -12,6 +12,7 @@ mod windows_settings;
 mod windows_shell;
 
 use std::cell::Cell;
+use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
@@ -90,6 +91,25 @@ impl PersistenceTracker {
 
     fn set_ambient_background(&mut self, enabled: bool) {
         self.desired.ambient_background = enabled;
+    }
+
+    fn set_route_preferences(
+        &mut self,
+        profile: String,
+        selected_group: Option<String>,
+        selections: BTreeMap<String, String>,
+    ) {
+        self.desired.active_profile_hint = Some(profile.clone());
+        if let Some(group) = selected_group {
+            self.desired
+                .last_group_by_profile
+                .insert(profile.clone(), group);
+        } else {
+            self.desired.last_group_by_profile.remove(&profile);
+        }
+        self.desired
+            .selections_by_profile
+            .insert(profile, selections);
     }
 
     fn observe(&mut self, observation: Option<WindowObservation>) -> Option<AppPreferences> {
@@ -349,7 +369,20 @@ fn main() -> Result<(), slint::PlatformError> {
     )));
     let preference_writer = Arc::new(Mutex::new(PreferenceWriter::start(preference_store)));
 
-    let model = Arc::new(Mutex::new(DesktopViewModel::new(client)));
+    let mut desktop_model = DesktopViewModel::new(client);
+    if let Some(profile) = loaded_preferences.active_profile_hint.as_deref() {
+        let selected_group = loaded_preferences
+            .last_group_by_profile
+            .get(profile)
+            .map(String::as_str);
+        let selections = loaded_preferences
+            .selections_by_profile
+            .get(profile)
+            .cloned()
+            .unwrap_or_default();
+        desktop_model.restore_route_preferences(selected_group, &selections);
+    }
+    let model = Arc::new(Mutex::new(desktop_model));
     let update_state = Arc::new(Mutex::new(UpdateState::initial()));
 
     let ui = AppWindow::new()?;
@@ -411,20 +444,24 @@ fn main() -> Result<(), slint::PlatformError> {
     .map_err(|error| eprintln!("tray unavailable: {error}"))
     .ok();
     wire_window_controls(&ui, tray_runtime.is_some());
-    let _preference_timer =
-        wire_preference_persistence(&ui, preference_writer.clone(), preference_tracker.clone());
+    let _preference_timer = wire_preference_persistence(
+        &ui,
+        model.clone(),
+        preference_writer.clone(),
+        preference_tracker.clone(),
+    );
     wire_updater(&ui, model.clone(), update_state.clone());
     if updater::configured_repository().ok().flatten().is_some() {
         run_update_check(ui.as_weak(), model.clone(), update_state);
     }
-    run_refresh(ui.as_weak(), model);
+    run_refresh(ui.as_weak(), model.clone());
     let starts_visible = initial_window_visible(launch_mode, tray_runtime.is_some());
     ui.set_shell_active(starts_visible);
     if starts_visible {
         ui.show()?;
     }
     let result = slint::run_event_loop();
-    flush_preferences(&ui, &preference_writer, &preference_tracker);
+    flush_preferences(&ui, &model, &preference_writer, &preference_tracker);
     let _ = ui.hide();
     drop(tray_runtime);
     result
@@ -832,13 +869,18 @@ fn preference_error_for_result(result: &WriterResult) -> &'static str {
 
 fn flush_preferences(
     ui: &AppWindow,
+    model: &Arc<Mutex<DesktopViewModel>>,
     writer: &Arc<Mutex<PreferenceWriter>>,
     tracker: &Arc<Mutex<PersistenceTracker>>,
 ) {
     let observation = observe_window(ui);
+    let route_preferences = model.lock().expect("view model lock").route_preferences();
     let preferences = {
         let mut tracker = tracker.lock().expect("preference tracker lock");
         tracker.set_ambient_background(ui.get_ambient_background_enabled());
+        if let Some((profile, selected_group, selections)) = route_preferences {
+            tracker.set_route_preferences(profile, selected_group, selections);
+        }
         tracker.snapshot_for_flush(observation.as_ref())
     };
     let saved = writer
@@ -859,6 +901,7 @@ fn flush_preferences(
 
 fn wire_preference_persistence(
     ui: &AppWindow,
+    model: Arc<Mutex<DesktopViewModel>>,
     writer: Arc<Mutex<PreferenceWriter>>,
     tracker: Arc<Mutex<PersistenceTracker>>,
 ) -> Timer {
@@ -883,9 +926,13 @@ fn wire_preference_persistence(
             &tracker,
         );
         let observation = observe_window(&ui);
+        let route_preferences = model.lock().expect("view model lock").route_preferences();
         let preferences = {
             let mut tracker = tracker.lock().expect("preference tracker lock");
             tracker.set_ambient_background(ui.get_ambient_background_enabled());
+            if let Some((profile, selected_group, selections)) = route_preferences {
+                tracker.set_route_preferences(profile, selected_group, selections);
+            }
             tracker.observe(observation)
         };
         if let Some(preferences) = preferences {
@@ -1138,7 +1185,7 @@ fn handle_tray_command(
             ui.invoke_select_catalog_node(node_id.into());
         }
         TrayCommand::Exit => {
-            flush_preferences(&ui, preference_writer, preference_tracker);
+            flush_preferences(&ui, model, preference_writer, preference_tracker);
             let _ = slint::quit_event_loop();
         }
     }
@@ -1954,6 +2001,35 @@ mod window_tests {
     }
 
     #[test]
+    fn route_preferences_flow_from_startup_model_to_atomic_persistence() {
+        let mut tracker = PersistenceTracker::new(AppPreferences::default());
+        let selections =
+            std::collections::BTreeMap::from([("group-a".to_owned(), "node-b".to_owned())]);
+        tracker.set_route_preferences(
+            "profile-a".to_owned(),
+            Some("group-a".to_owned()),
+            selections.clone(),
+        );
+        let saved = tracker.snapshot_for_flush(None);
+        assert_eq!(saved.active_profile_hint.as_deref(), Some("profile-a"));
+        assert_eq!(
+            saved
+                .last_group_by_profile
+                .get("profile-a")
+                .map(String::as_str),
+            Some("group-a")
+        );
+        assert_eq!(
+            saved.selections_by_profile.get("profile-a"),
+            Some(&selections)
+        );
+
+        let source = include_str!("main.rs");
+        assert!(source.contains("desktop_model.restore_route_preferences("));
+        assert!(source.contains("tracker.set_route_preferences("));
+    }
+
+    #[test]
     fn final_event_loop_exit_flushes_immediate_ambient_changes() {
         let mut tracker = PersistenceTracker::new(AppPreferences::default());
         tracker.set_ambient_background(false);
@@ -1966,9 +2042,9 @@ mod window_tests {
             .nth(1)
             .and_then(|source| source.split("fn activation_for_launch_arguments").next())
             .expect("common post-event-loop shutdown");
-        assert!(
-            shutdown.contains("flush_preferences(&ui, &preference_writer, &preference_tracker);")
-        );
+        assert!(shutdown.contains(
+            "flush_preferences(&ui, &model, &preference_writer, &preference_tracker);"
+        ));
         assert!(shutdown.find("flush_preferences").unwrap() < shutdown.find("ui.hide()").unwrap());
         assert!(!shutdown.contains(".stop();"));
 
