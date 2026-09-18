@@ -537,32 +537,28 @@ export component AppWindow inherits Window {
 
                 ambient-wave-a := Path {
                     visible: root.ambient-background-enabled;
-                    x: root.ambient-motion-active && root.ambient-wave-phase ? -30px : -38px;
-                    y: root.ambient-motion-active && root.ambient-wave-phase ? 74px : 68px;
+                    x: -38px;
+                    y: 68px;
                     width: parent.width + 76px;
                     height: 210px;
                     viewbox-width: 1000;
                     viewbox-height: 220;
                     commands: "M 0 124 C 160 40 340 36 500 112 C 668 192 824 184 1000 82 L 1000 220 L 0 220 Z";
                     fill: #c8cdd5;
-                    opacity: 0.02;
-                    animate x { duration: root.ambient-motion-active ? 12s : 0ms; easing: ease-in-out; }
-                    animate y { duration: root.ambient-motion-active ? 12s : 0ms; easing: ease-in-out; }
+                    opacity: 0.004;
                 }
 
                 ambient-wave-b := Path {
                     visible: root.ambient-background-enabled;
-                    x: root.ambient-motion-active && root.ambient-wave-phase ? -46px : -38px;
-                    y: root.ambient-motion-active && root.ambient-wave-phase ? 266px : 272px;
+                    x: -38px;
+                    y: 272px;
                     width: parent.width + 76px;
                     height: 240px;
                     viewbox-width: 1000;
                     viewbox-height: 240;
                     commands: "M 0 74 C 190 174 350 184 510 92 C 670 0 824 34 1000 142 L 1000 240 L 0 240 Z";
                     fill: #aeb5bf;
-                    opacity: 0.03;
-                    animate x { duration: root.ambient-motion-active ? 18s : 0ms; easing: ease-in-out; }
-                    animate y { duration: root.ambient-motion-active ? 18s : 0ms; easing: ease-in-out; }
+                    opacity: 0.004;
                 }
 
                 VerticalLayout {
@@ -1049,34 +1045,42 @@ export component AppWindow inherits Window {
 
     TouchArea {
         x: root.resize-border; y: 0px; width: parent.width - 2 * root.resize-border; height: root.resize-border;
+        mouse-cursor: ns-resize;
         pointer-event(event) => { if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) { root.window-resize("n"); } }
     }
     TouchArea {
         x: parent.width - root.resize-border; y: root.resize-border; width: root.resize-border; height: parent.height - 2 * root.resize-border;
+        mouse-cursor: ew-resize;
         pointer-event(event) => { if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) { root.window-resize("e"); } }
     }
     TouchArea {
         x: root.resize-border; y: parent.height - root.resize-border; width: parent.width - 2 * root.resize-border; height: root.resize-border;
+        mouse-cursor: ns-resize;
         pointer-event(event) => { if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) { root.window-resize("s"); } }
     }
     TouchArea {
         x: 0px; y: root.resize-border; width: root.resize-border; height: parent.height - 2 * root.resize-border;
+        mouse-cursor: ew-resize;
         pointer-event(event) => { if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) { root.window-resize("w"); } }
     }
     TouchArea {
         x: 0px; y: 0px; width: root.resize-border; height: root.resize-border;
+        mouse-cursor: nwse-resize;
         pointer-event(event) => { if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) { root.window-resize("nw"); } }
     }
     TouchArea {
         x: parent.width - root.resize-border; y: 0px; width: root.resize-border; height: root.resize-border;
+        mouse-cursor: nesw-resize;
         pointer-event(event) => { if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) { root.window-resize("ne"); } }
     }
     TouchArea {
         x: parent.width - root.resize-border; y: parent.height - root.resize-border; width: root.resize-border; height: root.resize-border;
+        mouse-cursor: nwse-resize;
         pointer-event(event) => { if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) { root.window-resize("se"); } }
     }
     TouchArea {
         x: 0px; y: parent.height - root.resize-border; width: root.resize-border; height: root.resize-border;
+        mouse-cursor: nesw-resize;
         pointer-event(event) => { if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) { root.window-resize("sw"); } }
     }
 }
