@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "platform": "macos-arm64",
+  "build": {
+    "rustToolchain": "1.98.1",
+    "desktopPackage": "multicore-desktop",
+    "daemonPackage": "multicore-daemon",
+    "coreHostPackage": "multicore-core-host",
+    "bundleIdentifier": "io.github.fatyzzz.multicore",
+    "minimumSystemVersion": "13.0",
+    "skiaBinaries": {
+      "skiaBindings": "0.99.0",
+      "key": "a25a0fdb7d90429aa2d1-aarch64-apple-darwin-gl-jpegd-jpege-metal-pdf-textlayout",
+      "url": "https://github.com/rust-skia/skia-binaries/releases/download/0.99.0/skia-binaries-a25a0fdb7d90429aa2d1-aarch64-apple-darwin-gl-jpegd-jpege-metal-pdf-textlayout.tar.gz",
+      "sha256": "1169e56adba14bf37c9b7890cd4ed1b85ec1a3f461f9083932ba6fae153090d0",
+      "license": "BSD-3-Clause"
+    }
+  },
+  "components": {
+    "xray": {
+      "project": "XTLS/Xray-core",
+      "version": "v26.9.30",
+      "commit": "b26a91de4f3294e26a0ad0a970b81a386a41f789",
+      "license": "MPL-2.0",
+      "asset": {
+        "name": "Xray-macos-arm64-v8a.zip",
+        "url": "https://github.com/XTLS/Xray-core/releases/download/v26.9.30/Xray-macos-arm64-v8a.zip",
+        "sha256": "4b363bd924df5bf09f87bd445755ff8e5742b9a8a0480cda261061416c3c7dce",
+        "format": "zip",
+        "entry": "xray",
+        "executableSha256": "118d6c6c8c2fb913c4b2aeb056a58936016b36813c38d9b75653311787c0f93c"
+      }
+    },
+    "mihomo": {
+      "project": "MetaCubeX/mihomo",
+      "version": "v1.19.32",
+      "commit": "88dcbf7f1614a67c3b36b848ee3592dfa92ada36",
+      "license": "GPL-3.0-only",
+      "build": {
+        "series": "multicore.1",
+        "recipe": "packaging/mihomo-patches/manifest.json",
+        "target": "darwin-arm64",
+        "file": "mihomo-darwin-arm64",
+        "executableSha256": "0203567d68a846e04dad6c770d754f8befa9eb4a5eb66ca9f109c55ef5e4932f",
+        "note": "Built by scripts/build-mihomo.sh from the pinned upstream source plus packaging/mihomo-patches (REALITY client version + adaptive X25519MLKEM768, see docs/reality.md). Never the stock MetaCubeX download."
+      }
+    },
+    "dashboard": {
+      "project": "Zephyruso/zashboard",
+      "version": "v3.29.1",
+      "commit": "50717b02dac68425cdc5b80cb754bea768ee4fc9",
+      "license": "MIT",
+      "asset": {
+        "name": "dist-no-fonts.zip",
+        "url": "https://github.com/Zephyruso/zashboard/releases/download/v3.29.1/dist-no-fonts.zip",
+        "sha256": "21371cd111b6b3d87774f3ea3ddeacdcb0f6aff8690a16d652daa3ea6e3b0145",
+        "rootPrefix": "dist/",
+        "maximumEntryBytes": 8388608,
+        "maximumExpandedBytes": 33554432,
+        "maximumEntryCount": 64,
+        "indexHtmlSha256": "70bb3dc4057cbc0feaff524672f2b0fbafa52279b757dbdc8cb8fdc3e6a73510",
+        "note": "dist-no-fonts is used (not dist-cdn-fonts/dist) so the vendored static UI never references a runtime font CDN. Verified empirically against the pinned Mihomo v1.19.30 binary: Mihomo requires an external-ui directory to be a subpath of its own home directory or listed in the SAFE_PATHS environment variable of the process that spawns it, and otherwise attempts a live download of a dashboard from the internet -- this package must always stage this directory and set SAFE_PATHS before launching Mihomo. indexHtmlSha256 pins the exact unpatched upstream index.html the packaging scripts know how to CSP-patch; a future re-vendor must review and re-pin it deliberately."
+      },
+      "licenseFile": {
+        "name": "zashboard-MIT.txt",
+        "url": "https://raw.githubusercontent.com/Zephyruso/zashboard/50717b02dac68425cdc5b80cb754bea768ee4fc9/LICENSE",
+        "sha256": "ffc390eec51f16b58506b1a42c99fe0cd9ffea1e3081aab443100fd8c20182d9"
+      },
+      "contentSecurityPolicy": "default-src 'self'; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:*; img-src 'self' data: https:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'"
+    }
+  }
+}

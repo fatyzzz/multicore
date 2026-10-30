@@ -57,10 +57,14 @@ command -v curl >/dev/null 2>&1 || fail "curl is required"
 
 case "$(uname -s)" in
     Linux) HOST_PLATFORM="linux-amd64"; IS_WINDOWS=0 ;;
+    Darwin) HOST_PLATFORM="darwin-arm64"; IS_WINDOWS=0 ;;
     MINGW*|MSYS*|CYGWIN*) HOST_PLATFORM="windows-amd64"; IS_WINDOWS=1 ;;
     *) fail "unsupported build host $(uname -s)" ;;
 esac
-[[ "$(uname -m)" == "x86_64" ]] || fail "the pinned Go archives are for x86_64 build hosts"
+case "$HOST_PLATFORM" in
+    darwin-arm64) [[ "$(uname -m)" == "arm64" ]] || fail "the pinned macOS Go archive is for Apple silicon build hosts" ;;
+    *) [[ "$(uname -m)" == "x86_64" ]] || fail "the pinned Go archives are for x86_64 build hosts" ;;
+esac
 
 # native <path>: the path as the (native) Go toolchain and Python expect it.
 native() { if [[ "$IS_WINDOWS" == 1 ]]; then cygpath -m "$1"; else printf '%s' "$1"; fi; }
