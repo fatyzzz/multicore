@@ -21,16 +21,16 @@ use multicore_daemon::{
     Backend, BackendError, ConnectOptions, CoreBackend, PreparedController, bind_loopback,
     options_controller_factory, publish_readiness_if_enabled, try_router_with_service_log,
 };
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
 use multicore_daemon::{
     connection_mode::NoProxyController, elevated_controller::ProductionElevatedController,
 };
 
 /// The daemon's connection controller: TUN through the service or the elevated host, or
-/// (Windows) the system-proxy mode.
-#[cfg(windows)]
+/// (Windows, macOS) the system-proxy mode.
+#[cfg(any(windows, target_os = "macos"))]
 type Controller = proxy_mode::Controller;
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
 type Controller = ModeController<
     Backed<ServiceTunController<ProductionServiceConnector>, ProductionElevatedController>,
     NoProxyController,
@@ -84,8 +84,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The vendored zashboard build ships as a `dashboard/` sibling of `cores/` and `runtime/`
     // at the package root (see packaging/*/versions.json). Mihomo never serves it (no
     // `external-ui`): the daemon's read-only dashboard proxy does, see `dashboard_proxy`.
+    // MultiCore.app keeps it in `Contents/Resources`: a signed bundle allows only code in
+    // `Contents/MacOS`, the package root.
     let dashboard_directory = env::current_exe().ok().and_then(|executable| {
-        dashboard_directory_for(&executable).map(|package_root| package_root.join("dashboard"))
+        dashboard_directory_for(&executable).map(|package_root| {
+            #[cfg(target_os = "macos")]
+            let package_root = package_root
+                .parent()
+                .map_or(package_root.clone(), |contents| contents.join("Resources"));
+            package_root.join("dashboard")
+        })
     });
 
     let store = ProfileStore::open(
@@ -111,16 +119,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let core_sessions_directory = data_directory
         .join("logs")
         .join(multicore_core::core_sessions::CORE_SESSIONS_DIRECTORY);
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     let system_proxy_marker = data_directory.join("system-proxy.json");
-    #[cfg(windows)]
-    if let Err(error) = multicore_daemon::system_proxy::recover(
-        &multicore_daemon::system_proxy::WinInetSettings,
-        &system_proxy_marker,
-    ) {
+    #[cfg(any(windows, target_os = "macos"))]
+    if let Err(error) =
+        multicore_daemon::system_proxy::recover(&proxy_mode::Settings, &system_proxy_marker)
+    {
         eprintln!("system proxy recovery failed: {error}");
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     let proxy_mode = proxy_mode::ProxyMode {
         package_root: env::current_exe()
             .ok()
@@ -147,9 +154,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // an elevation prompt (or to per-user cores).
                 return Err(BackendError::new());
             }
-            // TUN off without the service: cores run as this user (Windows only).
+            // TUN off without the service: cores run as this user (Windows). macOS has no
+            // service or TUN yet, so it always connects this way.
             #[cfg(windows)]
-            if !options.tun && !use_service {
+            let user_proxy_mode = !options.tun && !use_service;
+            #[cfg(target_os = "macos")]
+            let user_proxy_mode = !use_service;
+            #[cfg(any(windows, target_os = "macos"))]
+            if user_proxy_mode {
                 let control = runtime_control
                     .clone()
                     .with_xray_outbound_interface(interface)
@@ -501,34 +513,58 @@ fn random_hex(bytes: usize) -> Result<String, getrandom::Error> {
 /// itself, which is one level deeper. Matches
 /// `apps/multicore-core-host/src/runtime_paths.rs`'s resolution of the same
 /// directory.
-/// System-proxy mode (TUN off) on Windows: the daemon runs the cores itself, as the logged-in
-/// user, in a kill-on-close job, and points the user's proxy settings at Mihomo while it runs.
-#[cfg(windows)]
+/// System-proxy mode (TUN off): the daemon runs the cores itself, as the logged-in user (in a
+/// kill-on-close job on Windows, in their own process group on macOS), and points the user's
+/// proxy settings at Mihomo while it runs.
+#[cfg(any(windows, target_os = "macos"))]
 mod proxy_mode {
     use std::{path::PathBuf, sync::Arc};
 
+    #[cfg(target_os = "macos")]
+    use multicore_core::UnixGroupLauncher as Launcher;
+    #[cfg(windows)]
+    use multicore_core::WindowsJobLauncher as Launcher;
     use multicore_core::{
         CORE_READINESS_TIMEOUT, CoreLogBuffer, MihomoRuntimeControl, RuntimePaths,
-        SidecarProcessController, Snapshot, WindowsJobLauncher, stage_runtime_with_mihomo_control,
+        SidecarProcessController, Snapshot, stage_runtime_with_mihomo_control,
     };
+    #[cfg(windows)]
+    use multicore_daemon::service_client::{ServiceCoresController, ServiceSession};
+    #[cfg(target_os = "macos")]
+    pub(crate) use multicore_daemon::system_proxy::MacNetworkSettings as Settings;
+    #[cfg(windows)]
+    pub(crate) use multicore_daemon::system_proxy::WinInetSettings as Settings;
     use multicore_daemon::{
         BackendError, PreparedController,
         connection_mode::{Backed, ModeController, SystemProxyController},
         elevated_controller::ProductionElevatedController,
-        service_client::{
-            ProductionServiceConnector, ServiceCoresController, ServiceSession,
-            ServiceTunController,
-        },
-        system_proxy::{SystemProxy, WinInetSettings},
+        service_client::{ProductionServiceConnector, ServiceTunController},
+        system_proxy::SystemProxy,
     };
 
-    pub(crate) type LocalController =
-        SystemProxyController<SidecarProcessController<WindowsJobLauncher>>;
+    #[cfg(windows)]
+    const XRAY: &str = "xray.exe";
+    #[cfg(windows)]
+    const MIHOMO: &str = "mihomo.exe";
+    #[cfg(target_os = "macos")]
+    const XRAY: &str = "xray";
+    #[cfg(target_os = "macos")]
+    const MIHOMO: &str = "mihomo";
+
+    pub(crate) type LocalController = SystemProxyController<SidecarProcessController<Launcher>>;
+    #[cfg(windows)]
     pub(crate) type ServiceProxyController =
         SystemProxyController<ServiceCoresController<ProductionServiceConnector>>;
+    #[cfg(windows)]
     pub(crate) type Controller = ModeController<
         Backed<ServiceTunController<ProductionServiceConnector>, ProductionElevatedController>,
         Backed<ServiceProxyController, LocalController>,
+    >;
+    /// macOS has no always-ready service: the proxy mode is always the daemon's own cores.
+    #[cfg(target_os = "macos")]
+    pub(crate) type Controller = ModeController<
+        Backed<ServiceTunController<ProductionServiceConnector>, ProductionElevatedController>,
+        LocalController,
     >;
 
     pub(crate) struct ProxyMode {
@@ -544,18 +580,15 @@ mod proxy_mode {
     impl ProxyMode {
         /// Proxy mode on top of the service's always-running Mihomo: the daemon only points
         /// the user's proxy settings at its loopback mixed port.
+        #[cfg(windows)]
         pub(crate) fn service_controller(
             &self,
             service: &Arc<ServiceSession<ProductionServiceConnector>>,
             generation: u64,
             mixed_port: u16,
         ) -> Arc<Controller> {
-            let proxy = SystemProxy::new(
-                Box::new(WinInetSettings),
-                self.marker_path.clone(),
-                mixed_port,
-            )
-            .publishing_to(self.tunnel_proxy.clone());
+            let proxy = SystemProxy::new(Box::new(Settings), self.marker_path.clone(), mixed_port)
+                .publishing_to(self.tunnel_proxy.clone());
             Arc::new(ModeController::Proxy(Backed::Service(
                 SystemProxyController::new(
                     ServiceCoresController::new(service.clone(), generation),
@@ -582,8 +615,8 @@ mod proxy_mode {
                 .ok_or_else(BackendError::new)?
                 .join("cores");
             let paths = RuntimePaths {
-                xray_binary: cores.join("xray.exe"),
-                mihomo_binary: cores.join("mihomo.exe"),
+                xray_binary: cores.join(XRAY),
+                mihomo_binary: cores.join(MIHOMO),
                 xray_config: staged.paths().xray_config.clone(),
                 mihomo_config: staged.paths().mihomo_config.clone(),
                 dashboard_directory: self
@@ -596,17 +629,18 @@ mod proxy_mode {
                 CoreLogBuffer::persistent_or_memory(&self.log_path)
                     .with_journal(&self.journal_directory, true),
             );
-            let launcher =
-                WindowsJobLauncher::for_runtime(paths.clone(), logs, CORE_READINESS_TIMEOUT)
-                    .map_err(|_| BackendError::new())?;
-            let proxy = SystemProxy::new(Box::new(WinInetSettings), self.marker_path.clone(), port)
+            let launcher = Launcher::for_runtime(paths.clone(), logs, CORE_READINESS_TIMEOUT)
+                .map_err(|_| BackendError::new())?;
+            let proxy = SystemProxy::new(Box::new(Settings), self.marker_path.clone(), port)
                 .publishing_to(self.tunnel_proxy.clone());
-            let controller = Arc::new(ModeController::Proxy(Backed::OnDemand(
-                SystemProxyController::new(
-                    SidecarProcessController::with_launcher(paths, launcher),
-                    Arc::new(proxy),
-                ),
-            )));
+            let local = SystemProxyController::new(
+                SidecarProcessController::with_launcher(paths, launcher),
+                Arc::new(proxy),
+            );
+            #[cfg(windows)]
+            let controller = Arc::new(ModeController::Proxy(Backed::OnDemand(local)));
+            #[cfg(target_os = "macos")]
+            let controller = Arc::new(ModeController::Proxy(local));
             Ok(PreparedController::with_runtime(controller, staged))
         }
     }

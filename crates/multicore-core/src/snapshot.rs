@@ -2563,6 +2563,10 @@ rules: []
     }
 
     #[test]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "android", windows)),
+        ignore = "the logo path comes from /proc/<pid>/fd, which this platform lacks"
+    )]
     fn committed_outcome_survives_post_publication_logo_retention_failure() {
         let root = tempfile::tempdir().unwrap();
         let store = PersistentSnapshotStore::open(root.path()).unwrap();

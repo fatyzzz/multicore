@@ -8,19 +8,35 @@ use std::{
 const WINDOWS_APP_DIRECTORY: &str = "MultiCore";
 #[cfg(unix)]
 const UNIX_APP_DIRECTORY: &str = "multicore";
+#[cfg(target_os = "macos")]
+const MACOS_APP_DIRECTORY: &str = "MultiCore";
 
 pub fn user_data_root() -> io::Result<PathBuf> {
     #[cfg(windows)]
     {
         windows_data_root(std::env::var_os("LOCALAPPDATA").as_deref())
     }
-    #[cfg(unix)]
+    #[cfg(target_os = "macos")]
+    {
+        macos_library_root(std::env::var_os("HOME").as_deref(), "Application Support")
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
     {
         unix_data_root(
             std::env::var_os("XDG_DATA_HOME").as_deref(),
             std::env::var_os("HOME").as_deref(),
         )
     }
+}
+
+/// `~/Library/<folder>/MultiCore`, where macOS apps keep their data and caches.
+#[cfg(target_os = "macos")]
+fn macos_library_root(home: Option<&OsStr>, folder: &str) -> io::Result<PathBuf> {
+    Ok(absolute(home)
+        .ok_or_else(|| unavailable("HOME"))?
+        .join("Library")
+        .join(folder)
+        .join(MACOS_APP_DIRECTORY))
 }
 
 #[cfg(unix)]
@@ -31,7 +47,12 @@ pub fn user_config_root() -> io::Result<PathBuf> {
     )
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
+pub fn user_cache_root() -> io::Result<PathBuf> {
+    macos_library_root(std::env::var_os("HOME").as_deref(), "Caches")
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
 pub fn user_cache_root() -> io::Result<PathBuf> {
     unix_cache_root(
         std::env::var_os("XDG_CACHE_HOME").as_deref(),
@@ -39,9 +60,15 @@ pub fn user_cache_root() -> io::Result<PathBuf> {
     )
 }
 
+/// macOS has no `XDG_RUNTIME_DIR`; the per-user `TMPDIR` (`/var/folders/…/T/`, private to
+/// the user and cleaned at boot) plays its part.
 #[cfg(unix)]
 pub fn user_runtime_dir() -> io::Result<PathBuf> {
-    let directory = unix_runtime_dir(std::env::var_os("XDG_RUNTIME_DIR").as_deref())?;
+    #[cfg(target_os = "macos")]
+    let base = std::env::var_os("XDG_RUNTIME_DIR").or_else(|| std::env::var_os("TMPDIR"));
+    #[cfg(not(target_os = "macos"))]
+    let base = std::env::var_os("XDG_RUNTIME_DIR");
+    let directory = unix_runtime_dir(base.as_deref())?;
     ensure_private_directory(&directory)?;
     Ok(directory)
 }
@@ -90,6 +117,7 @@ fn unix_config_root(xdg_config_home: Option<&OsStr>, home: Option<&OsStr>) -> io
 }
 
 #[cfg(unix)]
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 fn unix_cache_root(xdg_cache_home: Option<&OsStr>, home: Option<&OsStr>) -> io::Result<PathBuf> {
     let base = match absolute(xdg_cache_home) {
         Some(base) => base.to_path_buf(),

@@ -1692,9 +1692,9 @@ pub mod unix {
                 });
             }
             let stream = UnixStream::connect(SOCKET_PATH).map_err(|_| ServiceError::Unavailable)?;
-            let peer = rustix::net::sockopt::socket_peercred(&stream)
+            let peer = multicore_platform::peer::peer_credentials(&stream)
                 .map_err(|_| ServiceError::Unavailable)?;
-            if peer.uid.as_raw() != 0 {
+            if peer.uid != 0 {
                 return Err(ServiceError::Impostor);
             }
             stream

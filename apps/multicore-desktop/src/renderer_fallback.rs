@@ -58,6 +58,19 @@ pub fn select_gpu_renderer() -> Result<(), slint::PlatformError> {
         .select()
 }
 
+/// Skia on Metal.
+#[cfg(target_os = "macos")]
+pub fn select_gpu_renderer() -> Result<(), slint::PlatformError> {
+    if std::env::var_os("SLINT_BACKEND").is_some() {
+        return Ok(());
+    }
+    slint::BackendSelector::new()
+        .backend_name("winit".into())
+        .renderer_name("skia".into())
+        .require_metal()
+        .select()
+}
+
 /// Whether a platform error from creating, showing or drawing a window means the
 /// GPU renderer itself failed, as opposed to any other failure. Also the errors
 /// that end the event loop for good after `event_loop_guard` could not recover

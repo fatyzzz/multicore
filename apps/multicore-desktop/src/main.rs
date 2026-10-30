@@ -955,8 +955,10 @@ fn run_desktop(software_renderer: bool) -> Result<(), slint::PlatformError> {
             ui.set_window_active(focused);
         }
     });
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
     ui.set_system_name("Linux".into());
+    #[cfg(target_os = "macos")]
+    ui.set_system_name("macOS".into());
     let _logo_cache_session = logo_cache::LogoCacheSession::install();
     if preference_writer
         .lock()

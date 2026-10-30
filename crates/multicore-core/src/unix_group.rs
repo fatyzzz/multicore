@@ -9,15 +9,37 @@ use std::{
     time::Duration,
 };
 
+#[cfg(target_os = "linux")]
 use rustix::io::Errno;
 use rustix::process::{
-    Pid, Signal, WaitId, WaitIdOptions, geteuid, getpid, getppid, kill_process_group,
-    set_parent_process_death_signal, waitid,
+    Pid, Signal, WaitId, WaitIdOptions, getpid, getppid, kill_process_group, waitid,
 };
+#[cfg(target_os = "linux")]
+use rustix::process::{geteuid, set_parent_process_death_signal};
+#[cfg(target_os = "linux")]
 use rustix::thread::{
     CapabilitySet, CapabilitySets, capabilities, clear_ambient_capability_set,
     remove_capability_from_bounding_set, set_capabilities,
 };
+
+/// macOS has no Linux capabilities. The set only keeps the launcher API the same; cores start
+/// with whatever the host process has, and nothing is dropped.
+#[cfg(not(target_os = "linux"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CapabilitySet(u64);
+
+#[cfg(not(target_os = "linux"))]
+impl CapabilitySet {
+    pub const NET_BIND_SERVICE: Self = Self(1 << 10);
+    pub const NET_ADMIN: Self = Self(1 << 12);
+    pub const NET_RAW: Self = Self(1 << 13);
+    pub const SYS_PTRACE: Self = Self(1 << 19);
+
+    #[must_use]
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+}
 
 use crate::{
     CommandSpec, CoreLogBuffer, DiagnosticStream, Engine, ManagedChild, ProcessError,
@@ -69,6 +91,7 @@ impl CoreCapabilities {
     }
 }
 /// Capability numbers are below 64; numbers the kernel doesn't know fail with `EINVAL`.
+#[cfg(target_os = "linux")]
 const CAPABILITY_NUMBERS: u32 = 64;
 
 type SpawnReply = tokio::sync::oneshot::Sender<io::Result<Child>>;
@@ -176,6 +199,7 @@ fn sanitized_environment(
 /// set is what must shrink; that needs `CAP_SETPCAP`, which is dropped last. An unprivileged
 /// process (no permitted capabilities, not root) cannot shrink it and has nothing to lose, so
 /// `EPERM` is accepted only there.
+#[cfg(target_os = "linux")]
 fn restrict_core_capabilities(keep: CapabilitySet) -> io::Result<()> {
     let current = capabilities(None)?;
     let privileged = !current.permitted.is_empty() || geteuid().is_root();
@@ -224,13 +248,18 @@ fn spawn_core(command: &CommandSpec, keep: Option<CapabilitySet>) -> io::Result<
         .process_group(0);
     unsafe {
         process.pre_exec(move || {
+            // macOS has no parent-death signal: there the host's `Drop` kills the group.
+            #[cfg(target_os = "linux")]
             set_parent_process_death_signal(Some(Signal::KILL))?;
             if getppid() != Some(parent) {
                 return Err(io::Error::other("core host exited before core start"));
             }
+            #[cfg(target_os = "linux")]
             if let Some(keep) = keep {
                 restrict_core_capabilities(keep)?;
             }
+            #[cfg(not(target_os = "linux"))]
+            let _ = keep;
             Ok(())
         });
     }
@@ -449,6 +478,7 @@ mod tests {
         assert!(process_is_gone(core));
     }
 
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn dropping_the_launcher_kills_cores_through_the_parent_death_signal() {
         let temp = tempfile::tempdir().unwrap();
@@ -525,9 +555,11 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     const PROBE_ENV: &str = "MULTICORE_CAPABILITY_PROBE";
 
     /// `Cap*:` lines of `/proc/self/status` as seen by a core started through `launcher`.
+    #[cfg(target_os = "linux")]
     async fn core_capabilities(launcher: &UnixGroupLauncher, engine: Engine) -> Vec<(String, u64)> {
         let temp = tempfile::tempdir().unwrap();
         let report = temp.path().join("caps");
@@ -552,6 +584,7 @@ mod tests {
             .collect()
     }
 
+    #[cfg(target_os = "linux")]
     fn set(capabilities: &[(String, u64)], name: &str) -> u64 {
         capabilities
             .iter()
@@ -560,6 +593,7 @@ mod tests {
             .unwrap_or_else(|| panic!("{name} missing"))
     }
 
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn restricted_cores_hold_no_capability_beyond_their_own_set() {
         let launcher = UnixGroupLauncher::new(Arc::new(CoreLogBuffer::default()))
@@ -580,6 +614,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn the_service_gives_xray_the_network_capabilities_and_mihomo_also_ptrace() {
         let network =
@@ -593,6 +628,7 @@ mod tests {
 
     /// Re-runs `restricted_core_capabilities_as_namespace_root` as root of a new user
     /// namespace, where the launcher holds `CAP_SETPCAP` like the systemd service does.
+    #[cfg(target_os = "linux")]
     #[test]
     fn restricted_cores_keep_only_their_own_capabilities_as_root() {
         let namespaces = std::process::Command::new("unshare")
@@ -622,6 +658,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     #[ignore = "run by restricted_cores_keep_only_their_own_capabilities_as_root"]
     async fn restricted_core_capabilities_as_namespace_root() {

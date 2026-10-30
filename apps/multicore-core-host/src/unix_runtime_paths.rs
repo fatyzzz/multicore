@@ -223,6 +223,10 @@ pub(crate) fn resolve_from(
             .rev()
             .find(|guard| guard.path == *binary)
             .ok_or(ResolveError::Missing)?;
+        #[cfg(target_os = "macos")]
+        multicore_platform::macho::validate_macho64_arm64(&mut guard.handle)
+            .map_err(|_| ResolveError::InvalidElf)?;
+        #[cfg(not(target_os = "macos"))]
         multicore_platform::elf::validate_elf64_x86_64(&mut guard.handle)
             .map_err(|_| ResolveError::InvalidElf)?;
     }

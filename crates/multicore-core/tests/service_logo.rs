@@ -287,6 +287,10 @@ fn rand_suffix() -> u64 {
 }
 
 #[tokio::test]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "android", windows)),
+    ignore = "the logo path comes from /proc/<pid>/fd, which this platform lacks"
+)]
 async fn valid_native_bundle_is_terminal_and_fetches_logo_once_after_parsing() {
     let calls = Arc::new(Mutex::new(Vec::new()));
     let http = LogoHttp {
@@ -333,6 +337,10 @@ async fn valid_native_bundle_is_terminal_and_fetches_logo_once_after_parsing() {
 }
 
 #[tokio::test]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "android", windows)),
+    ignore = "the logo path comes from /proc/<pid>/fd, which this platform lacks"
+)]
 async fn a_deferred_logo_is_not_downloaded_during_the_refresh_and_the_previous_one_is_kept() {
     let calls = Arc::new(Mutex::new(Vec::new()));
     let logo = Ok(HttpResponse::new(
@@ -387,6 +395,10 @@ async fn a_deferred_logo_is_not_downloaded_during_the_refresh_and_the_previous_o
 }
 
 #[tokio::test]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "android", windows)),
+    ignore = "the logo path comes from /proc/<pid>/fd, which this platform lacks"
+)]
 async fn arbitrary_vendor_prefix_is_accepted_only_for_safe_service_logo_suffix() {
     let calls = Arc::new(Mutex::new(Vec::new()));
     let root = temp_root("vendor-prefix");
@@ -485,6 +497,10 @@ async fn logo_failure_is_nonfatal_and_persists_no_logo() {
 }
 
 #[tokio::test]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "android", windows)),
+    ignore = "the logo path comes from /proc/<pid>/fd, which this platform lacks"
+)]
 async fn failed_logo_generation_staging_keeps_the_last_good_logo_path() {
     let root = temp_root("staging");
     let store = PersistentSnapshotStore::open(&root).unwrap();

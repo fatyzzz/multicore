@@ -1,8 +1,8 @@
-//! Windows system proxy for the TUN-off connection mode.
+//! System proxy for the TUN-off connection mode (Windows and macOS).
 //!
-//! While connected in that mode the user's WinINet proxy settings
-//! (`HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings`) point at Mihomo's
-//! loopback mixed port. The daemon runs as the logged-in user (the desktop spawns it without
+//! While connected in that mode the user's proxy settings point at Mihomo's loopback mixed
+//! port: WinINet (`HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings`) on
+//! Windows, every enabled network service's web, secure web and SOCKS proxy on macOS. The daemon runs as the logged-in user (the desktop spawns it without
 //! elevation), so it owns this per-user setting; the elevated core host never touches it.
 //!
 //! The previous values are saved to a marker file *before* anything is changed, so they come
@@ -28,6 +28,29 @@ pub struct ProxySettings {
     pub proxy_override: Option<String>,
     /// A PAC URL wins over a manual proxy, so it is removed while connected and put back after.
     pub auto_config_url: Option<String>,
+    /// macOS keeps proxies per network service: what each enabled service had, so every one is
+    /// put back as it was. Empty on Windows and in the applied settings.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub services: Vec<NetworkServiceProxy>,
+}
+
+/// One macOS network service's proxy configuration.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct NetworkServiceProxy {
+    pub name: String,
+    pub web: ProxyEndpoint,
+    pub secure_web: ProxyEndpoint,
+    pub socks: ProxyEndpoint,
+    pub bypass_domains: Vec<String>,
+    pub auto_proxy_url: Option<String>,
+    pub auto_proxy_enabled: bool,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ProxyEndpoint {
+    pub enabled: bool,
+    pub server: String,
+    pub port: u16,
 }
 
 impl ProxySettings {
@@ -38,6 +61,7 @@ impl ProxySettings {
             proxy_server: Some(applied_server(port)),
             proxy_override: Some(PROXY_OVERRIDE.to_owned()),
             auto_config_url: None,
+            services: Vec::new(),
         }
     }
 }
@@ -329,6 +353,7 @@ mod windows {
                 proxy_server: query_string(&key, "ProxyServer")?,
                 proxy_override: query_string(&key, "ProxyOverride")?,
                 auto_config_url: query_string(&key, "AutoConfigURL")?,
+                services: Vec::new(),
             })
         }
 
@@ -354,6 +379,229 @@ mod windows {
                 InternetSetOptionW(ptr::null(), INTERNET_OPTION_REFRESH, ptr::null(), 0);
             }
         }
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub use macos::MacNetworkSettings;
+
+/// `networksetup`, which an administrator may run without `sudo` for proxy settings. Only
+/// enabled services are touched; their state is read as a whole so it can be put back as is.
+#[cfg(target_os = "macos")]
+mod macos {
+    use std::{io, process::Command};
+
+    use super::{
+        InternetSettings, NetworkServiceProxy, PROXY_OVERRIDE, ProxyEndpoint, ProxySettings,
+    };
+
+    const NETWORKSETUP: &str = "/usr/sbin/networksetup";
+    /// macOS spelling of [`PROXY_OVERRIDE`]: loopback, link-local and private networks.
+    const BYPASS_DOMAINS: &[&str] = &[
+        "localhost",
+        "*.local",
+        "127.0.0.0/8",
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "169.254.0.0/16",
+    ];
+
+    pub struct MacNetworkSettings;
+
+    fn networksetup(args: &[&str]) -> io::Result<String> {
+        let output = Command::new(NETWORKSETUP).args(args).output()?;
+        if !output.status.success() {
+            return Err(io::Error::other(format!(
+                "networksetup {} failed: {}",
+                args.first().copied().unwrap_or_default(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    }
+
+    /// Enabled services; the first line is a legend and disabled ones start with `*`.
+    fn enabled_services() -> io::Result<Vec<String>> {
+        Ok(networksetup(&["-listallnetworkservices"])?
+            .lines()
+            .skip(1)
+            .filter(|line| !line.is_empty() && !line.starts_with('*'))
+            .map(str::to_owned)
+            .collect())
+    }
+
+    fn field<'a>(text: &'a str, name: &str) -> Option<&'a str> {
+        text.lines()
+            .find_map(|line| line.strip_prefix(name)?.strip_prefix(':'))
+            .map(str::trim)
+    }
+
+    fn read_endpoint(flag: &str, service: &str) -> io::Result<ProxyEndpoint> {
+        let text = networksetup(&[flag, service])?;
+        Ok(ProxyEndpoint {
+            enabled: field(&text, "Enabled") == Some("Yes"),
+            server: field(&text, "Server").unwrap_or_default().to_owned(),
+            port: field(&text, "Port")
+                .and_then(|port| port.parse().ok())
+                .unwrap_or_default(),
+        })
+    }
+
+    fn read_service(name: &str) -> io::Result<NetworkServiceProxy> {
+        let bypass = networksetup(&["-getproxybypassdomains", name])?;
+        let auto = networksetup(&["-getautoproxyurl", name])?;
+        Ok(NetworkServiceProxy {
+            name: name.to_owned(),
+            web: read_endpoint("-getwebproxy", name)?,
+            secure_web: read_endpoint("-getsecurewebproxy", name)?,
+            socks: read_endpoint("-getsocksfirewallproxy", name)?,
+            // «There aren't any bypass domains set on …» when the list is empty.
+            bypass_domains: bypass
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty() && !line.contains(' '))
+                .map(str::to_owned)
+                .collect(),
+            auto_proxy_url: field(&auto, "URL")
+                .filter(|url| *url != "(null)" && !url.is_empty())
+                .map(str::to_owned),
+            auto_proxy_enabled: field(&auto, "Enabled") == Some("Yes"),
+        })
+    }
+
+    fn write_endpoint(
+        set: &str,
+        state: &str,
+        service: &str,
+        endpoint: &ProxyEndpoint,
+    ) -> io::Result<()> {
+        if !endpoint.server.is_empty() && endpoint.port != 0 {
+            networksetup(&[set, service, &endpoint.server, &endpoint.port.to_string()])?;
+        }
+        networksetup(&[state, service, if endpoint.enabled { "on" } else { "off" }])?;
+        Ok(())
+    }
+
+    fn write_service(service: &NetworkServiceProxy) -> io::Result<()> {
+        let name = service.name.as_str();
+        write_endpoint("-setwebproxy", "-setwebproxystate", name, &service.web)?;
+        write_endpoint(
+            "-setsecurewebproxy",
+            "-setsecurewebproxystate",
+            name,
+            &service.secure_web,
+        )?;
+        write_endpoint(
+            "-setsocksfirewallproxy",
+            "-setsocksfirewallproxystate",
+            name,
+            &service.socks,
+        )?;
+        let mut bypass = vec!["-setproxybypassdomains", name];
+        if service.bypass_domains.is_empty() {
+            bypass.push("Empty");
+        } else {
+            bypass.extend(service.bypass_domains.iter().map(String::as_str));
+        }
+        networksetup(&bypass)?;
+        if let Some(url) = &service.auto_proxy_url {
+            networksetup(&["-setautoproxyurl", name, url])?;
+        }
+        networksetup(&[
+            "-setautoproxystate",
+            name,
+            if service.auto_proxy_enabled {
+                "on"
+            } else {
+                "off"
+            },
+        ])?;
+        Ok(())
+    }
+
+    /// The settings every service gets for `server` (`127.0.0.1:<port>`).
+    fn applied_service(name: &str, server: &str) -> io::Result<NetworkServiceProxy> {
+        let (host, port) = server
+            .rsplit_once(':')
+            .and_then(|(host, port)| Some((host, port.parse().ok()?)))
+            .ok_or_else(|| io::Error::other("proxy server is not host:port"))?;
+        let endpoint = ProxyEndpoint {
+            enabled: true,
+            server: host.to_owned(),
+            port,
+        };
+        Ok(NetworkServiceProxy {
+            name: name.to_owned(),
+            web: endpoint.clone(),
+            secure_web: endpoint.clone(),
+            socks: endpoint,
+            bypass_domains: BYPASS_DOMAINS
+                .iter()
+                .map(|domain| (*domain).to_owned())
+                .collect(),
+            auto_proxy_url: None,
+            auto_proxy_enabled: false,
+        })
+    }
+
+    impl InternetSettings for MacNetworkSettings {
+        /// `proxy_enable` and `proxy_server` summarise the services: on, with that server, only
+        /// while every service that has a proxy on has all three on the same `host:port`. A
+        /// service with no proxy at all (one that came up after the proxy was applied) is not
+        /// counted, so it cannot keep the applied proxy from being restored.
+        fn read(&self) -> io::Result<ProxySettings> {
+            let services = enabled_services()?
+                .iter()
+                .map(|name| read_service(name))
+                .collect::<io::Result<Vec<_>>>()?;
+            let server_of = |service: &NetworkServiceProxy| {
+                let web = &service.web;
+                (web.enabled && service.secure_web == *web && service.socks == *web)
+                    .then(|| format!("{}:{}", web.server, web.port))
+            };
+            let mut servers = services
+                .iter()
+                .filter(|service| {
+                    service.web.enabled || service.secure_web.enabled || service.socks.enabled
+                })
+                .map(server_of);
+            let first = servers.next().flatten();
+            let shared = first.filter(|server| servers.all(|other| other.as_ref() == Some(server)));
+            Ok(ProxySettings {
+                proxy_enable: Some(u32::from(shared.is_some())),
+                proxy_server: shared,
+                proxy_override: None,
+                auto_config_url: None,
+                services,
+            })
+        }
+
+        /// Either the applied settings (no `services`: every enabled service is pointed at
+        /// `proxy_server`) or a saved state (each service written back as it was).
+        fn write(&self, settings: &ProxySettings) -> io::Result<()> {
+            if !settings.services.is_empty() {
+                let mut first_error = None;
+                for service in &settings.services {
+                    if let Err(error) = write_service(service) {
+                        first_error.get_or_insert(error);
+                    }
+                }
+                return first_error.map_or(Ok(()), Err);
+            }
+            let server = match (settings.proxy_enable, &settings.proxy_server) {
+                (Some(1), Some(server)) => server,
+                _ => return Ok(()),
+            };
+            debug_assert_eq!(settings.proxy_override.as_deref(), Some(PROXY_OVERRIDE));
+            for name in enabled_services()? {
+                write_service(&applied_service(&name, server)?)?;
+            }
+            Ok(())
+        }
+
+        /// System Configuration tells running applications itself.
+        fn notify_changed(&self) {}
     }
 }
 
@@ -392,6 +640,7 @@ mod tests {
             proxy_server: Some("corp:3128".into()),
             proxy_override: None,
             auto_config_url: Some("http://wpad/proxy.pac".into()),
+            services: Vec::new(),
         }
     }
 

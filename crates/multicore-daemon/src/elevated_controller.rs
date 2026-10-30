@@ -1904,10 +1904,8 @@ pub mod unix {
             .set_write_timeout(Some(BROKER_IO_TIMEOUT))
             .map_err(|_| ElevationError::Io)?;
         let peer =
-            rustix::net::sockopt::socket_peercred(&stream).map_err(|_| ElevationError::Io)?;
-        if peer.uid.as_raw() != expected_peer_uid
-            || peer.pid.as_raw_nonzero().get() as u32 != host_pid
-        {
+            multicore_platform::peer::peer_credentials(&stream).map_err(|_| ElevationError::Io)?;
+        if peer.uid != expected_peer_uid || peer.pid != host_pid {
             return Err(ElevationError::PeerPidMismatch);
         }
         let mut writer = &stream;
@@ -2333,13 +2331,23 @@ mod tests {
             (launch, observed)
         }
 
+        /// macOS caps a socket path at 104 bytes, which a socket under the per-user `TMPDIR`
+        /// (`/var/folders/…/T/`) exceeds; `/tmp` keeps it short.
+        fn runtime_tempdir() -> std::io::Result<tempfile::TempDir> {
+            if cfg!(target_os = "macos") {
+                tempfile::tempdir_in("/tmp")
+            } else {
+                tempfile::tempdir()
+            }
+        }
+
         fn uid() -> u32 {
             rustix::process::getuid().as_raw()
         }
 
         #[test]
         fn authenticated_session_serves_matching_responses_and_removes_the_socket() {
-            let runtime = tempfile::tempdir().unwrap();
+            let runtime = runtime_tempdir().unwrap();
             let (launch, sockets) = fake_host(
                 Host::Respond(ElevationResponse::Stopped {
                     engine: ElevatedEngine::Xray,
@@ -2368,7 +2376,7 @@ mod tests {
 
         #[test]
         fn mismatched_responses_are_protocol_errors() {
-            let runtime = tempfile::tempdir().unwrap();
+            let runtime = runtime_tempdir().unwrap();
             let (launch, _) = fake_host(
                 Host::Respond(ElevationResponse::ShuttingDown),
                 std::process::id(),
@@ -2387,7 +2395,7 @@ mod tests {
 
         #[test]
         fn wrong_secret_uid_or_pid_fail_closed() {
-            let runtime = tempfile::tempdir().unwrap();
+            let runtime = runtime_tempdir().unwrap();
             let (launch, _) = fake_host(Host::WrongSecret, std::process::id());
             assert_eq!(
                 connect_with(runtime.path(), launch, uid(), Duration::from_secs(5)).err(),
@@ -2408,7 +2416,7 @@ mod tests {
 
         #[test]
         fn early_launcher_exit_and_silence_are_reported_without_leaking_sockets() {
-            let runtime = tempfile::tempdir().unwrap();
+            let runtime = runtime_tempdir().unwrap();
             for (code, expected) in [
                 (126, ElevationError::ElevationCancelled),
                 (127, ElevationError::LaunchFailed),
@@ -2449,7 +2457,7 @@ mod tests {
 
         #[test]
         fn authorization_timeout_kills_the_waiting_launcher() {
-            let runtime = tempfile::tempdir().unwrap();
+            let runtime = runtime_tempdir().unwrap();
             let launched = std::sync::Arc::new(std::sync::Mutex::new(None));
             let recorded = launched.clone();
             let result = connect_with(
@@ -2476,7 +2484,7 @@ mod tests {
 
         #[test]
         fn failed_session_setup_reaps_the_launched_host() {
-            let runtime = tempfile::tempdir().unwrap();
+            let runtime = runtime_tempdir().unwrap();
             let launched = std::sync::Arc::new(std::sync::Mutex::new(None));
             let recorded = launched.clone();
             // The fake connects from this process, so the launched child's PID never matches.
@@ -2535,7 +2543,7 @@ mod tests {
             use super::super::unix::stage_appimage_host;
             use std::os::unix::fs::PermissionsExt;
 
-            let temp = tempfile::tempdir().unwrap();
+            let temp = runtime_tempdir().unwrap();
             let cache = temp.path().join("cache");
             let host = appimage_package(temp.path(), b"host-one");
             let staged = stage_appimage_host(&host, &cache).unwrap();

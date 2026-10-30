@@ -123,8 +123,8 @@ pub(crate) fn verify_peer(
     server_pid: u32,
     owner_uid: u32,
 ) -> Result<(), HostError> {
-    let peer = rustix::net::sockopt::socket_peercred(stream).map_err(|_| HostError::Io)?;
-    if peer.pid.as_raw_nonzero().get() as u32 != server_pid || peer.uid.as_raw() != owner_uid {
+    let peer = multicore_platform::peer::peer_credentials(stream).map_err(|_| HostError::Io)?;
+    if peer.pid != server_pid || peer.uid != owner_uid {
         return Err(HostError::PeerMismatch);
     }
     Ok(())

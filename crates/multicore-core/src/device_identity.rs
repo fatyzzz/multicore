@@ -1063,7 +1063,7 @@ mod tests {
         assert_eq!(passwd_user_name(":x:5:5::/:/bin/sh", 5), None);
     }
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
     #[test]
     fn linux_hardware_inputs_use_the_incy_platform_constants() {
         let inputs = super::platform_hardware_inputs();

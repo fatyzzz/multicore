@@ -42,14 +42,13 @@ pub(crate) struct PeerFacts {
 /// `/proc/<pid>/exe` and `environ` needs `CAP_SYS_PTRACE` (ptrace read access), which the
 /// systemd unit keeps in its bounding set for exactly this.
 pub(crate) fn peer_facts(stream: &UnixStream) -> Result<PeerFacts, IdentityError> {
-    let credentials =
-        rustix::net::sockopt::socket_peercred(stream).map_err(|_| IdentityError::Unavailable)?;
-    let pid = credentials.pid.as_raw_nonzero().get() as u32;
-    let executable =
-        fs::read_link(format!("/proc/{pid}/exe")).map_err(|_| IdentityError::Unavailable)?;
+    let credentials = multicore_platform::peer::peer_credentials(stream)
+        .map_err(|_| IdentityError::Unavailable)?;
+    let executable = multicore_platform::peer::process_executable(credentials.pid)
+        .map_err(|_| IdentityError::Unavailable)?;
     Ok(PeerFacts {
-        pid,
-        uid: credentials.uid.as_raw(),
+        pid: credentials.pid,
+        uid: credentials.uid,
         executable,
     })
 }

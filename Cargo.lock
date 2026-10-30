@@ -3452,6 +3452,7 @@ dependencies = [
 name = "multicore-platform"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "rustix 1.1.4",
  "tempfile",
 ]

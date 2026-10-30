@@ -377,10 +377,13 @@ fn legacy_generation_migrates_offline_and_remains_as_rollback_material() {
     assert_eq!(migrated.subscription_info(), expected.subscription_info());
     assert_eq!(migrated.mihomo.raw_yaml(), expected.mihomo.raw_yaml());
     assert_eq!(migrated.xray.raw_bytes(), expected.xray.raw_bytes());
-    assert_eq!(
-        fs::read(migrated.service_logo_path().unwrap()).unwrap(),
-        logo
-    );
+    // The logo path comes from /proc/<pid>/fd; elsewhere on Unix the logo is not shown.
+    if cfg!(any(target_os = "linux", target_os = "android", windows)) {
+        assert_eq!(
+            fs::read(migrated.service_logo_path().unwrap()).unwrap(),
+            logo
+        );
+    }
     assert!(legacy.join("snapshot-00000000000000000001").is_dir());
     assert_eq!(capture_tree(&legacy), legacy_before);
 }
@@ -1129,6 +1132,10 @@ fn the_group_icon_cache_survives_reopening_and_drops_what_it_cannot_trust() {
 }
 
 #[test]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "android", windows)),
+    ignore = "the logo path comes from /proc/<pid>/fd, which this platform lacks"
+)]
 fn a_background_logo_replaces_the_shown_one_under_a_new_path_and_goes_with_its_profile() {
     use multicore_core::CachedServiceLogo;
     let directory = TempDirectory::new();

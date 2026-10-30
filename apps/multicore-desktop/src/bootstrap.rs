@@ -309,6 +309,10 @@ fn validate_native_executable(file: &mut File) -> Result<(), BootstrapError> {
     if mode & 0o111 == 0 {
         return Err(BootstrapError::Package);
     }
+    #[cfg(target_os = "macos")]
+    return multicore_platform::macho::validate_macho64_arm64(file)
+        .map_err(|_| BootstrapError::Package);
+    #[cfg(not(target_os = "macos"))]
     multicore_platform::elf::validate_elf64_x86_64(file).map_err(|_| BootstrapError::Package)
 }
 
@@ -1267,6 +1271,9 @@ mod unix_bootstrap {
         command.envs(daemon_environment(&paths, token));
         unsafe {
             command.pre_exec(move || {
+                // macOS has no parent-death signal; there the daemon outlives a crashed
+                // desktop until its own idle shutdown.
+                #[cfg(target_os = "linux")]
                 rustix::process::set_parent_process_death_signal(Some(Signal::TERM))?;
                 if getppid() != Some(parent) {
                     return Err(std::io::Error::other("desktop exited before daemon start"));

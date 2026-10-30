@@ -820,6 +820,10 @@ async fn profile_limit_is_reported_as_a_typed_mutation_error() {
 }
 
 #[tokio::test]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "android", windows)),
+    ignore = "the logo path comes from /proc/<pid>/fd, which this platform lacks"
+)]
 async fn imported_source_exposes_safe_metadata_and_can_refresh_without_resubmitting_url() {
     let root = tempfile::tempdir().unwrap();
     let store = ProfileStore::open(root.path(), None).unwrap();
@@ -1081,6 +1085,10 @@ async fn importing_an_existing_subscription_preserves_its_selected_node() {
 }
 
 #[tokio::test]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "android", windows)),
+    ignore = "the logo path comes from /proc/<pid>/fd, which this platform lacks"
+)]
 async fn refresh_keeps_the_logo_when_only_its_download_fails() {
     let root = tempfile::tempdir().unwrap();
     let http = FixtureHttp::default();
@@ -1127,6 +1135,10 @@ async fn refresh_keeps_the_logo_when_only_its_download_fails() {
 }
 
 #[tokio::test]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "android", windows)),
+    ignore = "the logo path comes from /proc/<pid>/fd, which this platform lacks"
+)]
 async fn profile_list_sanitizes_hostile_metadata_and_retains_inactive_logo() {
     let root = tempfile::tempdir().unwrap();
     let backend = test_backend(
